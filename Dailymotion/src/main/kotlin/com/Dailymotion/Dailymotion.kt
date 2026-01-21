@@ -1,81 +1,116 @@
 package com.Dailymotion
 
-import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
+import com.fasterxml.jackson.annotation.JsonProperty
+import com.lagradost.cloudstream3.HomePageList
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.SearchResponse
+import com.lagradost.cloudstream3.SearchResponseList
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.newMovieLoadResponse
+import com.lagradost.cloudstream3.newMovieSearchResponse
+import com.lagradost.cloudstream3.toNewSearchResponseList
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.StringUtils.encodeUri
+import com.lagradost.cloudstream3.utils.loadExtractor
 
 class Dailymotion : MainAPI() {
 
-    override var mainUrl = "https://api.dailymotion.com"
-    override var name = "Dailymotion"
-    override var lang = "es"
-    override val supportedTypes = setOf(TvType.Others)
-    override val hasMainPage = true
+    data class VideoSearchResponse(
+        @JsonProperty("list") val list: List<VideoItem>
+    )
 
     data class VideoItem(
-        val id: String,
-        val title: String,
-        val thumbnail_360_url: String?
+        @JsonProperty("id") val id: String,
+        @JsonProperty("title") val title: String,
+        @JsonProperty("thumbnail_360_url") val thumbnail360Url: String
     )
 
-    data class VideoList(
-        val list: List<VideoItem>
+    data class VideoDetailResponse(
+        @JsonProperty("id") val id: String,
+        @JsonProperty("title") val title: String,
+        @JsonProperty("description") val description: String,
+        @JsonProperty("thumbnail_720_url") val thumbnail720Url: String
     )
 
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
+    override var mainUrl = "https://api.dailymotion.com"
+    override var name = "Dailymotion"
+    override val supportedTypes = setOf(TvType.Others)
 
-        val data = app.get(
-            "$mainUrl/videos?fields=id,title,thumbnail_360_url&limit=20&page=$page&country=mx&language=es"
-        ).parsedSafe<VideoList>()?.list ?: emptyList()
+    override var lang = "mx"
+    override val hasMainPage = true
 
-        val items = data.map { it.toSearchResponse() }
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val response = app.get(
+            "$mainUrl/videos?fields=id,title,thumbnail_360_url" +
+                    "&limit=26&page=$page" +
+                    "&country=MX&language=es"
+        ).text
 
-        return HomePageResponse(
+        val populares = tryParseJson<VideoSearchResponse>(response)?.list ?: emptyList()
+
+        return newHomePageResponse(
             listOf(
                 HomePageList(
-                    name = "Dailymotion México",
-                    list = items,
-                    isHorizontalImages = true
-                )
-            ),
-            hasNext = true
+                    "Populares",
+                    populares.map { it.toSearchResponse(this) },
+                    true
+                ),
+            )
         )
     }
 
-    override suspend fun search(query: String): List<SearchResponse> {
-        val q = URLEncoder.encode(query, StandardCharsets.UTF_8.toString())
+    override suspend fun search(query: String, page: Int): SearchResponseList? {
+        val response = app.get(
+            "$mainUrl/videos?fields=id,title,thumbnail_360_url" +
+                    "&limit=26&page=$page" +
+                    "&country=MX&language=es" +
+                    "&search=${query.encodeUri()}"
+        ).text
 
-        val data = app.get(
-            "$mainUrl/videos?fields=id,title,thumbnail_360_url&limit=20&search=$q&country=mx&language=es"
-        ).parsedSafe<VideoList>()?.list ?: emptyList()
-
-        return data.map { it.toSearchResponse() }
+        val searchResults = tryParseJson<VideoSearchResponse>(response)?.list
+        return searchResults?.map {
+            it.toSearchResponse(this)
+        }?.toNewSearchResponseList()
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val id = url.substringAfterLast("/")
+        val videoId = Regex("dailymotion.com/video/([a-zA-Z0-9]+)")
+            .find(url)?.groups?.get(1)?.value ?: return null
 
-        val data = app.get(
-            "$mainUrl/video/$id?fields=id,title,description,thumbnail_720_url,embed_url&country=mx&language=es"
-        ).parsedSafe<Map<String, Any>>() ?: return null
+        val response = app.get(
+            "$mainUrl/video/$videoId?fields=id,title,description,thumbnail_720_url"
+        ).text
 
-        val title = data["title"] as? String ?: "Dailymotion"
-        val desc = data["description"] as? String
-        val poster = data["thumbnail_720_url"] as? String
-        val embed = data["embed_url"] as? String ?: ""
+        val videoDetail = tryParseJson<VideoDetailResponse>(response) ?: return null
+        return videoDetail.toLoadResponse(this)
+    }
 
-        return newMovieLoadResponse(
-            name = title,
-            url = url,
-            type = TvType.Others,
-            dataUrl = embed
+    private fun VideoItem.toSearchResponse(provider: Dailymotion): SearchResponse {
+        return provider.newMovieSearchResponse(
+            this.title,
+            "https://www.dailymotion.com/video/${this.id}",
+            TvType.Movie
         ) {
-            posterUrl = poster
-            plot = desc
+            this.posterUrl = thumbnail360Url
+        }
+    }
+
+    private suspend fun VideoDetailResponse.toLoadResponse(provider: Dailymotion): LoadResponse {
+        return provider.newMovieLoadResponse(
+            this.title,
+            "https://www.dailymotion.com/video/${this.id}",
+            TvType.Movie,
+            this.id
+        ) {
+            plot = description
+            posterUrl = thumbnail720Url
         }
     }
 
@@ -91,15 +126,5 @@ class Dailymotion : MainAPI() {
             callback
         )
         return true
-    }
-
-    private fun VideoItem.toSearchResponse(): SearchResponse {
-        return newMovieSearchResponse(
-            name = title,
-            url = "https://www.dailymotion.com/video/$id",
-            type = TvType.Others
-        ) {
-            posterUrl = thumbnail_360_url
-        }
     }
 }
