@@ -82,17 +82,17 @@ class IPTVPlayer : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val ld = parseJson<LoadData>(data)
+        val m3uCheck = ld.url.contains(".m3u8") || ld.url.contains(".m3u")
 
         callback.invoke(
-            newExtractorLink(
+            ExtractorLink(
                 this.name,
                 ld.title,
                 ld.url,
-                null // ExtractorLinkType?
-            ) {
-                this.quality = Qualities.Unknown.value
-                this.isM3u8 = ld.url.contains(".m3u8") || ld.url.contains(".m3u")
-            }
+                "",
+                Qualities.Unknown.value,
+                m3uCheck
+            )
         )
         return true
     }
@@ -102,8 +102,6 @@ class IPTVPlayer : MainAPI() {
         val title: String
     )
 }
-
-/* ============== CLASES DE APOYO (UNA SOLA VEZ) ============== */
 
 data class Playlist(val items: List<PlaylistItem> = emptyList())
 
