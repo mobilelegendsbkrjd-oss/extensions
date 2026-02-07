@@ -3,10 +3,10 @@ name: Build Cloudstream Extension (DEX)
 on:
   workflow_dispatch:
     inputs:
-      extension:
-        description: 'Nombre de la carpeta de la extensión'
+      extension_folder:
+        description: 'Nombre de la carpeta de la extensión (ej: IPTVPlayer)'
         required: true
-        default: 'IPTVMexico'
+        default: 'IPTVPlayer'
 
 jobs:
   build:
@@ -15,25 +15,53 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up JDK 17
+        uses: android-actions/setup-android@v3 # Prepara el entorno Android
+        
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Grant execute permission
         run: chmod +x gradlew
 
       - name: Build Extension (AAR)
-        run: ./gradlew ":${{ github.event.inputs.extension }}:assembleRelease"
+        # Aquí usamos la variable que tú escribas al iniciar el workflow
+        run: ./gradlew ":${{ github.event.inputs.extension_folder }}:assembleRelease"
 
       - name: Convert AAR to DEX
+        run: |
+          mkdir -p output
+          # Buscamos el archivo generado dinámicamente
+          AAR_PATH=$(find . -name "*release.aar" | grep "${{ github.event.inputs.extension_folder }}" | head -n 1)
+          
+          if [ -z "$AAR_PATH" ]; then
+            echo "Error: No se encontró el archivo AAR en la carpeta ${{ github.event.inputs.extension_folder }}"
+            exit 1
+          fi
+          
+          echo "Procesando: $AAR_PATH"
+          
+          # Extraer el contenido
+          unzip -j "$AAR_PATH" "classes.jar" -d temp_aar
+          
+          # Localizar d8 en el sistema
+          D8_PATH=$(find $ANDROID_HOME/build-tools -name d8 | sort -r | head -n 1)
+          
+          # Convertir a DEX
+          $D8_PATH temp_aar/classes.jar --output output/
+          
+          # Renombrar el resultado con el nombre de tu extensión
+          mv output/classes.dex output/${{ github.event.inputs.extension_folder }}.dex
+
+      - name: Upload DEX
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.extension_folder }}-dex
+          path: output/*.dex
         run: |
           mkdir -p output
           # Buscar el archivo AAR generado
