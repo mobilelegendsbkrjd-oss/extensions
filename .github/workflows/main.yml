@@ -44,4 +44,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dex-${{ github.event.inputs.extension }}
+          path: output/classes.dex          AAR=$(find ${{ github.event.inputs.extension }} -name "*.aar" | head -n 1)
+          echo "Using AAR: $AAR"
+          unzip "$AAR" -d aar
+          unzip aar/classes.jar -d classes
+          build-tools/android-13/d8 classes --output output
+
+      - name: Upload DEX
+        uses: actions/upload-artifact@v4
+        with:
+          name: dex-${{ github.event.inputs.extension }}
           path: output/classes.dex
