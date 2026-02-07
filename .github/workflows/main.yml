@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       extension_folder:
-        description: 'Nombre de la carpeta de tu extensión'
+        description: 'Nombre de la carpeta de la extensión'
         required: true
-        default: 'IPTVPlayer'
+        default: 'Anichi'
 
 jobs:
   build:
@@ -15,8 +15,6 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-        # Aquí eliminamos todo el ruido de 'ref', 'repository' y 'token'
-        # para que simplemente agarre TU código actual.
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -24,16 +22,38 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Grant execute permission
         run: chmod +x gradlew
 
-      - name: Build Extension (AAR)
+      - name: Create local.properties
+        run: echo "sdk.dir=/tmp" > local.properties
+
+      - name: Build extension
         run: ./gradlew ":${{ github.event.inputs.extension_folder }}:assembleRelease"
 
+      - name: Install tools
+        run: |
+          sudo apt update
+          sudo apt install -y unzip wget
+          wget https://dl.google.com/android/repository/build-tools_r33.0.2-linux.zip
+          unzip build-tools_r33.0.2-linux.zip
+
       - name: Convert AAR to DEX
+        run: |
+          mkdir -p output
+          # Busca el AAR dentro de la carpeta proporcionada
+          AAR=$(find "${{ github.event.inputs.extension_folder }}" -name "*.aar" | head -n 1)
+          echo "Using AAR: $AAR"
+          unzip "$AAR" -d aar
+          unzip aar/classes.jar -d classes
+          # Usa d8 de la carpeta que descargaste
+          android-13/d8 classes/*.class --output output/
+
+      - name: Upload DEX
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.extension_folder }}-dex
+          path: output/classes.dex
         run: |
           mkdir -p output
           AAR_PATH=$(find . -name "*release.aar" | grep "${{ github.event.inputs.extension_folder }}" | head -n 1)
