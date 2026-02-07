@@ -25,8 +25,12 @@ jobs:
       - name: Grant execute permission
         run: chmod +x gradlew
 
-      - name: Create local.properties
-        run: echo "sdk.dir=/tmp" > local.properties
+      - name: Setup Android SDK & Licenses
+        run: |
+          # Usar el SDK que ya viene instalado en el runner en lugar de /tmp
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          # Aceptar todas las licencias automáticamente
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME --licenses || true
 
       - name: Build extension
         run: ./gradlew ":${{ github.event.inputs.extension_folder }}:assembleRelease"
@@ -42,10 +46,14 @@ jobs:
         run: |
           mkdir -p output
           AAR=$(find "${{ github.event.inputs.extension_folder }}" -name "*.aar" | head -n 1)
+          if [ -z "$AAR" ]; then
+            echo "Error: No se encontró el AAR"
+            exit 1
+          fi
           echo "Using AAR: $AAR"
           unzip "$AAR" -d aar
           unzip aar/classes.jar -d classes
-          # Usamos el d8 que se acaba de descargar y descomprimir
+          # Usamos d8 de la carpeta android-13 que descomprimimos
           android-13/d8 classes/*.class --output output/
 
       - name: Upload DEX
