@@ -10,7 +10,6 @@ class IPTVPlayer : MainAPI() {
     override var lang = "es"
     override var name = "IPTV México"
     override val hasMainPage = true
-    // Cambiamos a LiveStream para mejor soporte de interfaz de TV
     override val supportedTypes = setOf(TvType.Live)
 
     private val baseUrl =
@@ -34,6 +33,121 @@ class IPTVPlayer : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val shows = lists.map { (title, _, poster) ->
             newTvSeriesSearchResponse(title, title, TvType.Live) {
+                this.posterUrl = poster
+            }
+        }
+
+        return newHomePageResponse(
+            listOf(HomePageList("Listas IPTV", shows, false))
+        )
+    }
+
+    override suspend fun search(query: String): List<SearchResponse> = emptyList()
+
+    override suspend fun load(url: String): LoadResponse {
+        val list = lists.find { url == it.first || url.endsWith(it.first) || url.contains(it.first) }
+            ?: throw ErrorLoadingException("Lista no encontrada: $url")
+
+        val data = IptvPlaylistParser().parseM3U(app.get(list.second).text)
+
+        val sorted = data.items
+            .filter { !it.title.isNullOrBlank() && !it.url.isNullOrBlank() }
+            .sortedBy { it.title!!.lowercase() }
+
+        val episodes = sorted.mapIndexed { index, ch ->
+            newEpisode(ch.url!!) {
+                this.name = ch.title!!
+                this.episode = index + 1
+                this.season = 1
+                this.posterUrl = ch.logo
+                this.data = LoadData(ch.url!!, ch.title!!).toJson()
+            }
+        }
+
+        return newTvSeriesLoadResponse(
+            list.first,
+            list.first,
+            TvType.Live,
+            episodes
+        ) {
+            this.posterUrl = list.third
+            this.plot = "Canales en vivo: ${list.first}"
+        }
+    }
+
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val ld = parseJson<LoadData>(data)
+
+        callback.invoke(
+            newExtractorLink(
+                this.name,
+                ld.title,
+                ld.url,
+                "", // Referer
+                Qualities.Unknown.value,
+                ld.url.contains(".m3u8") || ld.url.contains(".m3u") // isM3u8
+            )
+        )
+        return true
+    }
+
+    data class LoadData(
+        val url: String,
+        val title: String
+    )
+}
+
+/* ============== PARSER ROBUSTO ============== */
+
+data class Playlist(val items: List<PlaylistItem> = emptyList())
+
+data class PlaylistItem(
+    val title: String? = null,
+    val url: String? = null,
+    val logo: String? = null
+)
+
+class IptvPlaylistParser {
+
+    fun parseM3U(content: String): Playlist = parseM3U(content.byteInputStream())
+
+    fun parseM3U(input: java.io.InputStream): Playlist {
+        val reader = input.bufferedReader()
+        val firstLine = reader.readLine()
+        if (firstLine == null || !firstLine.startsWith("#EXTM3U")) throw Exception("M3U inválido")
+
+        val items = mutableListOf<PlaylistItem>()
+        var currentTitle: String? = null
+        var currentLogo: String? = null
+
+        reader.forEachLine { line ->
+            val t = line.trim()
+            when {
+                t.startsWith("#EXTINF") -> {
+                    currentTitle = t.substringAfterLast(",").trim()
+                    currentLogo = Regex("""tvg-logo="([^"]+)"""").find(t)?.groupValues?.get(1)
+                }
+                t.isNotEmpty() && !t.startsWith("#") -> {
+                    items.add(
+                        PlaylistItem(
+                            title = currentTitle ?: "Canal sin nombre",
+                            url = t,
+                            logo = currentLogo
+                        )
+                    )
+                    currentTitle = null
+                    currentLogo = null
+                }
+            }
+        }
+        return Playlist(items)
+    }
+}
                 this.posterUrl = poster
             }
         }
