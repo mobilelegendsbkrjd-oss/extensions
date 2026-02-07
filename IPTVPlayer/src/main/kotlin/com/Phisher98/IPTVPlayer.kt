@@ -10,7 +10,8 @@ class IPTVPlayer : MainAPI() {
     override var lang = "es"
     override var name = "IPTV México"
     override val hasMainPage = true
-    override val supportedTypes = setOf(TvType.TvSeries)
+    // Cambiamos a LiveStream para mejor soporte de interfaz de TV
+    override val supportedTypes = setOf(TvType.Live)
 
     private val baseUrl =
         "https://raw.githubusercontent.com/mobilelegendsbkrjd-oss/lat_cs_bkrjd/main/builds/iptv/"
@@ -32,7 +33,7 @@ class IPTVPlayer : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val shows = lists.map { (title, _, poster) ->
-            newTvSeriesSearchResponse(title, title, TvType.TvSeries) {
+            newTvSeriesSearchResponse(title, title, TvType.Live) {
                 this.posterUrl = poster
             }
         }
@@ -60,6 +61,7 @@ class IPTVPlayer : MainAPI() {
                 this.episode = index + 1
                 this.season = 1
                 this.posterUrl = ch.logo
+                // Guardamos la URL y el nombre en el JSON de data
                 this.data = LoadData(ch.url!!, ch.title!!).toJson()
             }
         }
@@ -67,11 +69,11 @@ class IPTVPlayer : MainAPI() {
         return newTvSeriesLoadResponse(
             list.first,
             list.first,
-            TvType.TvSeries,
+            TvType.Live,
             episodes
         ) {
             this.posterUrl = list.third
-            this.plot = "Canales en vivo"
+            this.plot = "Canales en vivo de la categoría ${list.first}"
         }
     }
 
@@ -82,16 +84,20 @@ class IPTVPlayer : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val ld = parseJson<LoadData>(data)
+        
+        // Verificamos si es un archivo .m3u8 para marcarlo correctamente
+        val isM3u8 = ld.url.contains(".m3u8") || ld.url.contains(".m3u")
 
         callback.invoke(
-            newExtractorLink(
+            ExtractorLink(
                 this.name,
                 ld.title,
                 ld.url,
-                INFER_TYPE
-            ) {
-                this.quality = Qualities.Unknown.value
-            }
+                "", // Referer vacío usualmente funciona para IPTV libre
+                Qualities.Unknown.value,
+                isM3u8 = isM3u8,
+                isLive = true // <--- ESTO EVITA QUE EL CANAL SE CAMBIE SOLO
+            )
         )
         return true
     }
@@ -118,7 +124,8 @@ class IptvPlaylistParser {
 
     fun parseM3U(input: java.io.InputStream): Playlist {
         val reader = input.bufferedReader()
-        if (!reader.readLine().startsWith("#EXTM3U")) throw Exception("M3U inválido")
+        val firstLine = reader.readLine()
+        if (firstLine == null || !firstLine.startsWith("#EXTM3U")) throw Exception("M3U inválido")
 
         val items = mutableListOf<PlaylistItem>()
         var currentTitle: String? = null
@@ -128,13 +135,15 @@ class IptvPlaylistParser {
             val t = line.trim()
             when {
                 t.startsWith("#EXTINF") -> {
-                    currentTitle = t.split(",").lastOrNull()?.trim()
-                    currentLogo = Regex("""tvg-logo="(.*?)"""").find(t)?.groupValues?.get(1)
+                    // Extraer título después de la última coma
+                    currentTitle = t.substringAfterLast(",").trim()
+                    // Extraer logo con Regex
+                    currentLogo = Regex("""tvg-logo="([^"]+)"""").find(t)?.groupValues?.get(1)
                 }
-                !t.startsWith("#") && t.isNotEmpty() -> {
+                t.isNotEmpty() && !t.startsWith("#") -> {
                     items.add(
                         PlaylistItem(
-                            title = currentTitle,
+                            title = currentTitle ?: "Canal sin nombre",
                             url = t,
                             logo = currentLogo
                         )
