@@ -10,7 +10,7 @@ class IPTVPlayer : MainAPI() {
     override var lang = "es"
     override var name = "IPTV México"
     override val hasMainPage = true
-    override val supportedTypes = setOf(TvType.Live)
+    override val supportedTypes = setOf(TvType.TvSeries)
 
     private val baseUrl =
         "https://raw.githubusercontent.com/mobilelegendsbkrjd-oss/lat_cs_bkrjd/main/builds/iptv/"
@@ -32,7 +32,7 @@ class IPTVPlayer : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val shows = lists.map { (title, _, poster) ->
-            newTvSeriesSearchResponse(title, title, TvType.Live) {
+            newTvSeriesSearchResponse(title, title, TvType.TvSeries) {
                 this.posterUrl = poster
             }
         }
@@ -67,11 +67,11 @@ class IPTVPlayer : MainAPI() {
         return newTvSeriesLoadResponse(
             list.first,
             list.first,
-            TvType.Live,
+            TvType.TvSeries,
             episodes
         ) {
             this.posterUrl = list.third
-            this.plot = "Canales en vivo: ${list.first}"
+            this.plot = "Canales en vivo"
         }
     }
 
@@ -82,17 +82,20 @@ class IPTVPlayer : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val ld = parseJson<LoadData>(data)
-        val m3uCheck = ld.url.contains(".m3u8") || ld.url.contains(".m3u")
 
+        // Usamos la estructura que tenías pero definiendo INFER_TYPE 
+        // y añadiendo el flag isM3u8 dentro del inicializador para estabilidad
         callback.invoke(
-            ExtractorLink(
+            newExtractorLink(
                 this.name,
                 ld.title,
                 ld.url,
-                "",
-                Qualities.Unknown.value,
-                m3uCheck
-            )
+                "" // Referer vacío como pide tu versión
+            ) {
+                this.quality = Qualities.Unknown.value
+                // Al poner esto, CloudStream detecta que es un flujo continuo
+                this.isM3u8 = true 
+            }
         )
         return true
     }
@@ -102,6 +105,8 @@ class IPTVPlayer : MainAPI() {
         val title: String
     )
 }
+
+/* ============== PARSER CON LOGO ============== */
 
 data class Playlist(val items: List<PlaylistItem> = emptyList())
 
@@ -128,13 +133,13 @@ class IptvPlaylistParser {
             val t = line.trim()
             when {
                 t.startsWith("#EXTINF") -> {
-                    currentTitle = t.substringAfterLast(",").trim()
-                    currentLogo = Regex("""tvg-logo="([^"]+)"""").find(t)?.groupValues?.get(1)
+                    currentTitle = t.split(",").lastOrNull()?.trim()
+                    currentLogo = Regex("""tvg-logo="(.*?)"""").find(t)?.groupValues?.get(1)
                 }
-                t.isNotEmpty() && !t.startsWith("#") -> {
+                !t.startsWith("#") && t.isNotEmpty() -> {
                     items.add(
                         PlaylistItem(
-                            title = currentTitle ?: "Canal sin nombre",
+                            title = currentTitle,
                             url = t,
                             logo = currentLogo
                         )
