@@ -88,10 +88,11 @@ class IPTVPlayer : MainAPI() {
                 this.name,
                 ld.title,
                 ld.url,
-                "", // Referer
-                Qualities.Unknown.value,
-                ld.url.contains(".m3u8") || ld.url.contains(".m3u") // isM3u8
-            )
+                null // ExtractorLinkType?
+            ) {
+                this.quality = Qualities.Unknown.value
+                this.isM3u8 = ld.url.contains(".m3u8") || ld.url.contains(".m3u")
+            }
         )
         return true
     }
@@ -102,7 +103,7 @@ class IPTVPlayer : MainAPI() {
     )
 }
 
-/* ============== PARSER ROBUSTO ============== */
+/* ============== CLASES DE APOYO (UNA SOLA VEZ) ============== */
 
 data class Playlist(val items: List<PlaylistItem> = emptyList())
 
@@ -130,128 +131,6 @@ class IptvPlaylistParser {
             when {
                 t.startsWith("#EXTINF") -> {
                     currentTitle = t.substringAfterLast(",").trim()
-                    currentLogo = Regex("""tvg-logo="([^"]+)"""").find(t)?.groupValues?.get(1)
-                }
-                t.isNotEmpty() && !t.startsWith("#") -> {
-                    items.add(
-                        PlaylistItem(
-                            title = currentTitle ?: "Canal sin nombre",
-                            url = t,
-                            logo = currentLogo
-                        )
-                    )
-                    currentTitle = null
-                    currentLogo = null
-                }
-            }
-        }
-        return Playlist(items)
-    }
-}
-                this.posterUrl = poster
-            }
-        }
-
-        return newHomePageResponse(
-            listOf(HomePageList("Listas IPTV", shows, false))
-        )
-    }
-
-    override suspend fun search(query: String): List<SearchResponse> = emptyList()
-
-    override suspend fun load(url: String): LoadResponse {
-        val list = lists.find { url == it.first || url.endsWith(it.first) || url.contains(it.first) }
-            ?: throw ErrorLoadingException("Lista no encontrada: $url")
-
-        val data = IptvPlaylistParser().parseM3U(app.get(list.second).text)
-
-        val sorted = data.items
-            .filter { !it.title.isNullOrBlank() && !it.url.isNullOrBlank() }
-            .sortedBy { it.title!!.lowercase() }
-
-        val episodes = sorted.mapIndexed { index, ch ->
-            newEpisode(ch.url!!) {
-                this.name = ch.title!!
-                this.episode = index + 1
-                this.season = 1
-                this.posterUrl = ch.logo
-                // Guardamos la URL y el nombre en el JSON de data
-                this.data = LoadData(ch.url!!, ch.title!!).toJson()
-            }
-        }
-
-        return newTvSeriesLoadResponse(
-            list.first,
-            list.first,
-            TvType.Live,
-            episodes
-        ) {
-            this.posterUrl = list.third
-            this.plot = "Canales en vivo de la categoría ${list.first}"
-        }
-    }
-
-    override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        val ld = parseJson<LoadData>(data)
-        
-        // Verificamos si es un archivo .m3u8 para marcarlo correctamente
-        val isM3u8 = ld.url.contains(".m3u8") || ld.url.contains(".m3u")
-
-        callback.invoke(
-            ExtractorLink(
-                this.name,
-                ld.title,
-                ld.url,
-                "", // Referer vacío usualmente funciona para IPTV libre
-                Qualities.Unknown.value,
-                isM3u8 = isM3u8,
-                isLive = true // <--- ESTO EVITA QUE EL CANAL SE CAMBIE SOLO
-            )
-        )
-        return true
-    }
-
-    data class LoadData(
-        val url: String,
-        val title: String
-    )
-}
-
-/* ============== PARSER CON LOGO ============== */
-
-data class Playlist(val items: List<PlaylistItem> = emptyList())
-
-data class PlaylistItem(
-    val title: String? = null,
-    val url: String? = null,
-    val logo: String? = null
-)
-
-class IptvPlaylistParser {
-
-    fun parseM3U(content: String): Playlist = parseM3U(content.byteInputStream())
-
-    fun parseM3U(input: java.io.InputStream): Playlist {
-        val reader = input.bufferedReader()
-        val firstLine = reader.readLine()
-        if (firstLine == null || !firstLine.startsWith("#EXTM3U")) throw Exception("M3U inválido")
-
-        val items = mutableListOf<PlaylistItem>()
-        var currentTitle: String? = null
-        var currentLogo: String? = null
-
-        reader.forEachLine { line ->
-            val t = line.trim()
-            when {
-                t.startsWith("#EXTINF") -> {
-                    // Extraer título después de la última coma
-                    currentTitle = t.substringAfterLast(",").trim()
-                    // Extraer logo con Regex
                     currentLogo = Regex("""tvg-logo="([^"]+)"""").find(t)?.groupValues?.get(1)
                 }
                 t.isNotEmpty() && !t.startsWith("#") -> {
