@@ -6,7 +6,7 @@ on:
       extension_folder:
         description: 'Nombre de la carpeta de la extensión'
         required: true
-        default: 'Anichi'
+        default: 'IPTVPlayer'
 
 jobs:
   build:
@@ -41,12 +41,11 @@ jobs:
       - name: Convert AAR to DEX
         run: |
           mkdir -p output
-          # Busca el AAR dentro de la carpeta proporcionada
           AAR=$(find "${{ github.event.inputs.extension_folder }}" -name "*.aar" | head -n 1)
           echo "Using AAR: $AAR"
           unzip "$AAR" -d aar
           unzip aar/classes.jar -d classes
-          # Usa d8 de la carpeta que descargaste
+          # Usamos el d8 que se acaba de descargar y descomprimir
           android-13/d8 classes/*.class --output output/
 
       - name: Upload DEX
@@ -54,22 +53,3 @@ jobs:
         with:
           name: ${{ github.event.inputs.extension_folder }}-dex
           path: output/classes.dex
-        run: |
-          mkdir -p output
-          AAR_PATH=$(find . -name "*release.aar" | grep "${{ github.event.inputs.extension_folder }}" | head -n 1)
-          
-          if [ -z "$AAR_PATH" ]; then
-            echo "Error: No se encontró el archivo AAR. Revisa el nombre de la carpeta."
-            exit 1
-          fi
-          
-          unzip -j "$AAR_PATH" "classes.jar" -d temp_aar
-          D8_PATH=$(find $ANDROID_HOME/build-tools -name d8 | sort -r | head -n 1)
-          $D8_PATH temp_aar/classes.jar --output output/
-          mv output/classes.dex output/${{ github.event.inputs.extension_folder }}.dex
-
-      - name: Upload DEX
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ github.event.inputs.extension_folder }}-dex
-          path: output/*.dex
