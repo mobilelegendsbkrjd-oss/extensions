@@ -84,7 +84,6 @@ class Latanime : MainAPI() {
 
                     // 🔥 SI TU CORE YA LO SOPORTA → botón flotante
                     try {
-                        this.skipIntro = IntroSkip(0, 90)
                     } catch (_: Exception) {
                         // ignora si el core no lo tiene
                     }
