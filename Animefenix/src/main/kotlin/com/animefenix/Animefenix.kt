@@ -25,9 +25,14 @@ class Animefenix : MainAPI() {
     // ==============================
 
     override val mainPage = mainPageOf(
-        "$mainUrl/directorio/anime?p=" to "Animes",
-        "$mainUrl/directorio/anime?estreno=2025&p=" to "Estrenos 2025",
-        "$mainUrl/directorio/anime?estreno=2024&p=" to "Estrenos 2024"
+        "$mainUrl/directorio/anime?idioma=2&q=&p=" to "Anime Doblado",
+        "$mainUrl/directorio/anime?idioma=1&q=&p=" to "Anime Subtitulado",
+        "$mainUrl/directorio/anime?tipo=2&idioma=2&q=&p=" to "Películas Doblado",
+        "$mainUrl/directorio/anime?tipo=2&idioma=1&q=&p=" to "Películas Subtitulado",
+
+        "$mainUrl/directorio/anime?estreno=2023&p=" to "Estrenos 2023",
+        "$mainUrl/directorio/anime?estreno=2024&p=" to "Estrenos 2024",
+        "$mainUrl/directorio/anime?estreno=2025&p=" to "Estrenos 2025"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
