@@ -23,6 +23,28 @@ class Latanime : MainAPI() {
         "animes?fecha=false&genero=false&letra=false&categoria=especial" to "Especial"
     )
 
+    // 🔥 AniSkip (SIN suspend para evitar errores)
+    private suspend fun getAniSkipIntro(
+        malId: Int,
+        episode: Int
+    ): Pair<Int, Int>? {
+        return try {
+            val url = "https://api.aniskip.com/v2/skip-times/$malId/$episode?types=op"
+            val res = app.get(url).parsedSafe<Map<String, Any>>() ?: return null
+
+            val results = res["results"] as? List<Map<String, Any>> ?: return null
+            val op = results.firstOrNull { it["skip_type"] == "op" } ?: return null
+            val interval = op["interval"] as? Map<String, Double> ?: return null
+
+            val start = interval["start_time"]?.toInt() ?: return null
+            val end = interval["end_time"]?.toInt() ?: return null
+
+            Pair(start, end)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get("$mainUrl/${request.data}&p=$page").document
         val home = document.select("div.row a").mapNotNull { it.toSearchResult() }
@@ -68,25 +90,15 @@ class Latanime : MainAPI() {
         return if (epsAnchor.size > 1) {
 
             val episodes = epsAnchor.mapIndexed { index, it ->
-
                 val epPoster = it.select("img").attr("data-src")
                 val epHref = it.attr("href")
 
                 newEpisode(epHref) {
-
                     this.posterUrl = epPoster
-
-                    // 🔥 METADATA COMPLETA (ACTIVA UI MODERNA)
                     this.name = "Episodio ${index + 1}"
                     this.episode = index + 1
                     this.season = 1
                     this.description = "Episodio ${index + 1}"
-
-                    // 🔥 SI TU CORE YA LO SOPORTA → botón flotante
-                    try {
-                    } catch (_: Exception) {
-                        // ignora si el core no lo tiene
-                    }
                 }
             }
 
@@ -123,7 +135,7 @@ class Latanime : MainAPI() {
 
             loadExtractor(
                 href,
-                data, // 🔥 FIX IMPORTANTE (referer correcto)
+                data,
                 subtitleCallback,
                 callback
             )

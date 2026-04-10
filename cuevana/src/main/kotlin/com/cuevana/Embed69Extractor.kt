@@ -1,4 +1,5 @@
 package com.cuevana
+
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.amap
@@ -8,13 +9,11 @@ import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 
 object Embed69Extractor {
+
     suspend fun load(
         url: String,
         referer: String,
@@ -22,19 +21,25 @@ object Embed69Extractor {
         callback: (ExtractorLink) -> Unit
     ) {
         app.get(url).document.select("script")
-            .firstOrNull { it.html().contains("dataLink = [") }?.html()
+            .firstOrNull { it.html().contains("dataLink = [") }
+            ?.html()
             ?.substringAfter("dataLink = ")
-            ?.substringBefore(";")?.let {
+            ?.substringBefore(";")
+            ?.let {
                 AppUtils.tryParseJson<List<ServersByLang>>(it)?.amap { lang ->
-                    val jsonData = LinksRequest(lang.sortedEmbeds.amap { it.link!! })
+                    val jsonData = LinksRequest(lang.sortedEmbeds.mapNotNull { it.link })
                     val body = jsonData.toJson()
                         .toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
-                    val decrypted = app.post("https://embed69.org/api/decrypt", requestBody = body)
-                        .parsedSafe<Loadlinks>()
+
+                    val decrypted = app.post(
+                        "https://embed69.org/api/decrypt",
+                        requestBody = body
+                    ).parsedSafe<Loadlinks>()
+
                     if (decrypted?.success == true) {
                         decrypted.links.amap {
                             loadSourceNameExtractor(
-                                lang.videoLanguage!!,
+                                lang.videoLanguage ?: "Unknown",
                                 fixHostsLinks(it.link),
                                 referer,
                                 subtitleCallback,
@@ -55,7 +60,7 @@ data class Server(
 data class ServersByLang(
     @JsonProperty("file_id") val fileId: String? = null,
     @JsonProperty("video_language") val videoLanguage: String? = null,
-    @JsonProperty("sortedEmbeds") val sortedEmbeds: List<Server> = emptyList<Server>(),
+    @JsonProperty("sortedEmbeds") val sortedEmbeds: List<Server> = emptyList(),
 )
 
 data class LinksRequest(
@@ -79,24 +84,29 @@ suspend fun loadSourceNameExtractor(
     subtitleCallback: (SubtitleFile) -> Unit,
     callback: (ExtractorLink) -> Unit,
 ) {
+    val links = mutableListOf<ExtractorLink>()
+
     loadExtractor(url, referer, subtitleCallback) { link ->
-        CoroutineScope(Dispatchers.IO).launch {
-            callback.invoke(
-                newExtractorLink(
-                    "$source[${link.source}]",
-                    "$source[${link.source}]",
-                    link.url,
-                ) {
-                    this.quality = link.quality
-                    this.type = link.type
-                    this.referer = link.referer
-                    this.headers = link.headers
-                    this.extractorData = link.extractorData
-                }
-            )
-        }
+        links.add(link)
+    }
+
+    links.forEach { link ->
+        callback(
+            newExtractorLink(
+                "$source[${link.source}]",
+                "$source[${link.source}]",
+                link.url
+            ) {
+                this.quality = link.quality
+                this.type = link.type
+                this.referer = link.referer
+                this.headers = link.headers
+                this.extractorData = link.extractorData
+            }
+        )
     }
 }
+
 
 fun fixHostsLinks(url: String): String {
     return url
