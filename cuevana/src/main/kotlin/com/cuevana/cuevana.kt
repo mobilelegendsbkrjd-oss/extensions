@@ -7,7 +7,9 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
-// ================= MODELOS =================
+// =============================
+// MODELOS JSON (COMPATIBLE JACKSON)
+// =============================
 
 data class ApiResponse(
     @JsonProperty("props") var props: Props? = null
@@ -20,7 +22,26 @@ data class Props(
 data class PageProps(
     @JsonProperty("thisMovie") var thisMovie: MediaItem? = null,
     @JsonProperty("thisSerie") var thisSerie: MediaItem? = null,
-    @JsonProperty("episode") var episode: EpisodeInfo? = null
+    @JsonProperty("episode") var episode: EpisodeInfo? = null,
+    @JsonProperty("relatedMovies") var relatedMovies: List<RelatedMovie>? = null
+)
+
+data class RelatedMovie(
+    @JsonProperty("titles") val titles: Titles? = null,
+    @JsonProperty("slug") val slug: Slug? = null,
+    @JsonProperty("images") val images: Images? = null
+)
+
+data class Titles(
+    @JsonProperty("name") val name: String? = null
+)
+
+data class Slug(
+    @JsonProperty("name") val name: String? = null
+)
+
+data class Images(
+    @JsonProperty("poster") val poster: String? = null
 )
 
 data class MediaItem(
@@ -58,64 +79,48 @@ data class VideoInfo(
     @JsonProperty("result") var result: String? = null
 )
 
-// ================= MAIN =================
+// =============================
+// MAIN API
+// =============================
 
 class Cuevana : MainAPI() {
-
     override var mainUrl = "https://cuevana3.eu/"
     override var name = "Cuevana"
     override var lang = "es"
-
     override val hasMainPage = true
     override val hasQuickSearch = true
+    override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    private val headers = mapOf(
-        "User-Agent" to USER_AGENT,
-        "Referer" to mainUrl
+    private val requestHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language" to "es-ES,es;q=0.8,en-US;q=0.5,en;q=0.3"
     )
 
-    // 🔥 HOME PRO
     override val mainPage = mainPageOf(
-        "$mainUrl/peliculas/tendencias/dia/page/" to "🔥 Tendencias Películas",
-        "$mainUrl/series/tendencias/dia/page/" to "🔥 Tendencias Series",
-        "$mainUrl/peliculas/estrenos/page/" to "🆕 Estrenos Películas",
-        "$mainUrl/series/estrenos/page/" to "🆕 Estrenos Series",
-        "$mainUrl/peliculas/page/" to "🎬 Películas",
-        "$mainUrl/series/page/" to "📺 Series"
+        "$mainUrl/peliculas/tendencias/dia/page/" to "Películas en Tendencia",
+        "$mainUrl/series/tendencias/dia/page/" to "Series en Tendencia",
+        "$mainUrl/peliculas/estrenos/page/" to "Estrenos Películas",
+        "$mainUrl/series/estrenos/page/" to "Estrenos Series"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = app.get("${request.data}$page", headers = headers).document
+        val url = "${request.data}$page"
+        val doc = app.get(url, headers = requestHeaders).document
+
         val items = doc.select("main .MovieList.Rows .TPostMv, main .MovieList li.TPostMv")
             .mapNotNull { it.toSearchResult() }
+
         return newHomePageResponse(request.name, items)
     }
 
-    // ================= IMÁGENES PRO =================
-
-    private fun fixImageUrl(url: String?): String? {
-        if (url.isNullOrEmpty()) return null
-        if (url.startsWith("data:image")) return null
-        if (url.startsWith("http")) return url
-        if (url.startsWith("//")) return "https:$url"
-        return "$mainUrl/${url.trimStart('/')}"
-    }
-
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = selectFirst(".Title, h2, h3")?.text() ?: return null
+        val title = selectFirst(".Title")?.text() ?: return null
         val href = selectFirst("a")?.attr("href") ?: return null
+        val poster = fixUrlNull(selectFirst("img")?.attr("src"))
 
-        val poster = fixImageUrl(
-            selectFirst("img")?.let {
-                it.attr("data-src")
-                    .ifEmpty { it.attr("src") }
-                    .ifEmpty { it.attr("data-lazy-src") }
-                    .ifEmpty { it.attr("srcset").substringBefore(" ") }
-            }
-        )
-
-        val isSeries = href.contains("serie")
+        val isSeries = href.contains("serie") || href.contains("/serie/")
 
         return if (isSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
@@ -129,55 +134,53 @@ class Cuevana : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val doc = app.get("$mainUrl/search?q=${URLEncoder.encode(query, "UTF-8")}").document
-        return doc.select(".MovieList .TPost").mapNotNull { it.toSearchResult() }
+        val url = "$mainUrl/search?q=${URLEncoder.encode(query, "UTF-8")}"
+        val doc = app.get(url, headers = requestHeaders).document
+
+        return doc.select(".MovieList .TPost")
+            .mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val doc = app.get(url).document
+        val doc = app.get(url, headers = requestHeaders).document
 
         val title = doc.selectFirst("h1")?.text() ?: "Sin título"
-
-        val poster = fixImageUrl(
-            doc.selectFirst("img")?.attr("data-src")
-                ?: doc.selectFirst("img")?.attr("src")
-        )
-
-        val banner = fixImageUrl(
-            doc.selectFirst(".backdrop img")?.attr("data-src")
-                ?: doc.selectFirst(".backdrop img")?.attr("src")
-        )
-
+        val poster = fixUrlNull(doc.selectFirst("img")?.attr("src"))
         val plot = doc.selectFirst(".Description")?.text()
 
         val json = doc.selectFirst("script#__NEXT_DATA__")?.data()
-        val parsed = runCatching { parseJson<ApiResponse>(json ?: "") }.getOrNull()
+        val parsed = if (!json.isNullOrEmpty()) {
+            try {
+                parseJson<ApiResponse>(json)
+            } catch (e: Exception) {
+                null
+            }
+        } else null
 
         val episodes = mutableListOf<Episode>()
 
         parsed?.props?.pageProps?.thisSerie?.seasons?.forEach { season ->
             season.episodes?.forEach { ep ->
                 val epUrl = "$mainUrl/episodio/${ep.url?.slug}"
-
-                episodes.add(newEpisode(epUrl) {
-                    this.name = ep.title
-                    this.season = season.number
-                    this.episode = ep.number
-                    this.posterUrl = fixImageUrl(ep.image)
-                })
+                episodes.add(
+                    newEpisode(epUrl) {
+                        this.name = ep.title ?: "Episodio ${ep.number}"
+                        this.season = season.number ?: 1
+                        this.episode = ep.number ?: 1
+                        this.posterUrl = fixUrlNull(ep.image)
+                    }
+                )
             }
         }
 
         return if (episodes.isNotEmpty()) {
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
-                this.backgroundPosterUrl = banner
                 this.plot = plot
             }
         } else {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
-                this.backgroundPosterUrl = banner
                 this.plot = plot
             }
         }
