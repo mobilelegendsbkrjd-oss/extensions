@@ -6,10 +6,8 @@ import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
-
-// =============================
-// MODELOS JSON
-// =============================
+import java.net.URLDecoder
+import android.util.Log   // ← agregado para debug
 
 data class ApiResponse(
     @JsonProperty("props") var props: Props? = null
@@ -60,10 +58,6 @@ data class VideoInfo(
     @JsonProperty("result") var result: String? = null
 )
 
-// =============================
-// MAIN
-// =============================
-
 class Cuevana : MainAPI() {
 
     override var mainUrl = "https://cuevana3.eu/"
@@ -80,38 +74,58 @@ class Cuevana : MainAPI() {
         "Referer" to mainUrl
     )
 
-    // 🔥 MÁS CATEGORÍAS (NO ROMPE NADA)
     override val mainPage = mainPageOf(
-        "$mainUrl/peliculas/tendencias/dia/page/" to "🔥 Tendencias Películas",
-        "$mainUrl/series/tendencias/dia/page/" to "🔥 Tendencias Series",
-        "$mainUrl/peliculas/estrenos/page/" to "🆕 Estrenos Películas",
-        "$mainUrl/series/estrenos/page/" to "🆕 Estrenos Series",
-        "$mainUrl/peliculas/page/" to "🎬 Todas las Películas",
-        "$mainUrl/series/page/" to "📺 Todas las Series"
+        "$mainUrl/peliculas/tendencias/dia/page/" to "Películas en Tendencia",
+        "$mainUrl/series/tendencias/dia/page/" to "Series en Tendencia",
+        "$mainUrl/peliculas/estrenos/page/" to "Estrenos Películas",
+        "$mainUrl/series/estrenos/page/" to "Estrenos Series",
+        "$mainUrl/peliculas/page/" to "Todas las Películas",
+        "$mainUrl/series/page/" to "Todas las Series"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val doc = app.get("${request.data}$page", headers = requestHeaders).document
-
         val items = doc.select("main .MovieList.Rows .TPostMv, main .MovieList li.TPostMv")
             .mapNotNull { it.toSearchResult() }
-
         return newHomePageResponse(request.name, items)
     }
 
-    // =============================
-    // FIX IMÁGENES (SEGURO)
-    // =============================
+    private fun extractNextImage(url: String?): String? {
+        if (url.isNullOrEmpty()) return null
+        if (!url.contains("/_next/image")) return url
+
+        val real = Regex("url=([^&]+)")
+            .find(url)
+            ?.groupValues?.get(1)
+
+        return try {
+            URLDecoder.decode(real ?: return null, "UTF-8")
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     private fun Element.getPoster(): String? {
-        val img = selectFirst("img") ?: return null
+        val imgs = select("img")
 
-        return fixUrlNull(
-            img.attr("data-src")
-                .ifEmpty { img.attr("src") }
+        for (img in imgs) {
+            val raw = img.attr("data-src")
                 .ifEmpty { img.attr("data-lazy-src") }
+                .ifEmpty { img.attr("src") }
                 .ifEmpty { img.attr("srcset").substringBefore(" ") }
-        )
+
+            val decoded = extractNextImage(raw)
+
+            if (!decoded.isNullOrEmpty()
+                && !decoded.contains("logo", true)
+                && !decoded.contains("_next/static", true)
+                && decoded.contains("http")
+            ) {
+                return decoded
+            }
+        }
+
+        return null
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
@@ -142,11 +156,28 @@ class Cuevana : MainAPI() {
         val doc = app.get(url, headers = requestHeaders).document
 
         val title = doc.selectFirst("h1")?.text() ?: "Sin título"
-        val poster = doc.getPoster()
         val plot = doc.selectFirst(".Description")?.text()
 
         val json = doc.selectFirst("script#__NEXT_DATA__")?.data()
         val parsed = runCatching { parseJson<ApiResponse>(json ?: "") }.getOrNull()
+
+        // 🔥 VERSIÓN ULTRA BRUTA: busca exactamente la imagen grande (alt vacío)
+        var poster = doc.selectFirst(".backdrop > .Image > img[alt='']")?.let {
+            val raw = it.attr("srcset").ifEmpty { it.attr("src") }
+            extractNextImage(raw)
+        } ?: doc.select(".backdrop .Image img").lastOrNull()?.let {
+            val raw = it.attr("srcset").ifEmpty { it.attr("src") }
+            extractNextImage(raw)
+        }
+
+        // Debug para que veas en logcat qué URL está usando
+        Log.d("CuevanaPoster", "URL FINAL USADA COMO POSTER: $poster")
+
+        // Fallbacks por si acaso
+        if (poster.isNullOrEmpty()) {
+            poster = extractNextImage(doc.selectFirst("meta[property=og:image]")?.attr("content"))
+                ?: doc.getPoster()
+        }
 
         val episodes = mutableListOf<Episode>()
 
@@ -158,7 +189,7 @@ class Cuevana : MainAPI() {
                     this.name = ep.title ?: "Episodio ${ep.number}"
                     this.season = season.number ?: 1
                     this.episode = ep.number ?: 1
-                    this.posterUrl = fixUrlNull(ep.image)
+                    this.posterUrl = extractNextImage(ep.image)
                 })
             }
         }
@@ -176,7 +207,6 @@ class Cuevana : MainAPI() {
         }
     }
 
-    // 🔥 loadLinks INTACTO (NO TOCADO)
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -207,7 +237,6 @@ class Cuevana : MainAPI() {
 
             suspend fun process(v: VideoInfo) {
                 val embedUrl = v.result ?: return
-
                 val resolved = StreamflixResolver.resolve(embedUrl, data)
 
                 if (!resolved.isNullOrBlank()) {
