@@ -1,8 +1,8 @@
-package com.byayzen
+package com.gnulahd
 
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import kotlinx.coroutines.*
 import org.jsoup.nodes.Element
 
 class GnulaHD : MainAPI() {
@@ -19,66 +19,46 @@ class GnulaHD : MainAPI() {
     )
 
     private val headers = mapOf(
-        "User-Agent" to USER_AGENT,
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
         "Referer" to mainUrl
     )
 
-    // ============================
-    // MAIN PAGE
-    // ============================
-
     override val mainPage = mainPageOf(
-        "$mainUrl/ver/?type=Pelicula&order=latest" to "Últimas Películas",
-        "$mainUrl/ver/?type=Serie&order=latest" to "Últimas Series",
-        "$mainUrl/ver/?type=Anime&order=latest" to "Últimos Animes"
+        "$mainUrl/ver/?type=Pelicula&order=latest" to "Películas",
+        "$mainUrl/ver/?type=Serie&order=latest" to "Series",
+        "$mainUrl/ver/?type=Anime&order=latest" to "Anime"
     )
 
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val doc = app.get("${request.data}&page=$page", headers = headers).document
 
-        val doc = app.get(request.data, headers = headers).document
-
-        val items = doc.select("article, div.item")
+        val items = doc.select(".items .bsx, .bsx, article")
             .mapNotNull { it.toSearchResult() }
 
         return newHomePageResponse(request.name, items)
     }
 
-    // ============================
-    // SEARCH
-    // ============================
-
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/?s=${query.encodeUrl()}"
-        val doc = app.get(url, headers = headers).document
+        val doc = app.get("$mainUrl/?s=${query.encodeUrl()}", headers = headers).document
 
-        return doc.select("article, div.result-item")
+        return doc.select(".items .bsx, .bsx, article")
             .mapNotNull { it.toSearchResult() }
     }
-
-    // ============================
-    // LOAD
-    // ============================
 
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url, headers = headers).document
 
         val title = doc.selectFirst("h1")?.text() ?: return null
-        val poster = doc.selectFirst(".poster img")?.attr("src")
-        val description = doc.selectFirst(".sinopsis, .description")?.text()
+        val poster = doc.selectFirst("img")?.attr("src")
+        val description = doc.selectFirst(".sinopsis, .infox p")?.text()
 
-        val episodes = doc.select(".episode-item").mapIndexed { index, ep ->
-            val epTitle = ep.text()
-            val epUrl = ep.attr("href")
+        val episodes = doc.select(".eplister ul li, .episodelist li").mapIndexed { index, ep ->
+            val epUrl = ep.selectFirst("a")?.attr("href") ?: return@mapIndexed null
 
             newEpisode(epUrl) {
-                this.name = epTitle
-                this.season = 1
                 this.episode = index + 1
             }
-        }
+        }.filterNotNull()
 
         return if (episodes.isNotEmpty()) {
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
@@ -93,10 +73,6 @@ class GnulaHD : MainAPI() {
         }
     }
 
-    // ============================
-    // LOAD LINKS
-    // ============================
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -104,66 +80,54 @@ class GnulaHD : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        val visited = mutableSetOf<String>()
+        val doc = app.get(data, headers = headers).document
+        val html = doc.html()
+        val mapper = jacksonObjectMapper()
 
-        return try {
-            supervisorScope {
-                extractLinks(data, data, subtitleCallback, callback, visited)
+        try {
+            val regex = Regex("""_gnpv_ep_langs\s*=\s*(\[[\s\S]*?]);""")
+            val match = regex.find(html)
+
+            if (match != null) {
+                val json = match.groupValues[1]
+                val langs = mapper.readTree(json)
+
+                langs.forEach { lang ->
+                    val servers = lang.get("servers")
+
+                    servers?.forEach { srv ->
+                        val link = srv.get("src")?.asText() ?: return@forEach
+
+                        if (!link.contains("youtube") && !link.contains("youtu.be")) {
+                            loadExtractor(link, data, subtitleCallback, callback)
+                        }
+                    }
+                }
+
+                return true
             }
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
 
-    private suspend fun extractLinks(
-        url: String,
-        referer: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit,
-        visited: MutableSet<String>
-    ) {
-        if (visited.contains(url)) return
-        visited.add(url)
+        } catch (_: Exception) {}
 
-        val doc = app.get(url, headers = headers).document
-
-        // Iframes
+        // fallback
         doc.select("iframe[src]").forEach {
-            val link = fixUrl(it.attr("src"))
-            loadExtractor(link, referer, subtitleCallback, callback)
-        }
-
-        // Links directos
-        doc.select("a[href]").forEach {
-            val link = it.attr("href")
-            if (link.contains("voe") ||
-                link.contains("filemoon") ||
-                link.contains("stream")
-            ) {
-                loadExtractor(link, referer, subtitleCallback, callback)
+            val link = it.attr("src")
+            if (!link.contains("youtube")) {
+                loadExtractor(link, data, subtitleCallback, callback)
             }
         }
-    }
 
-    // ============================
-    // PARSER ITEM
-    // ============================
+        return true
+    }
 
     private fun Element.toSearchResult(): SearchResponse? {
-
-        val title = selectFirst("h2, h3")?.text() ?: return null
+        val title = selectFirst(".tt, h2, h3")?.text() ?: return null
         val href = selectFirst("a")?.attr("href") ?: return null
         val poster = selectFirst("img")?.attr("src")
 
-        val type = when {
-            href.contains("pelicula") -> TvType.Movie
-            href.contains("serie") -> TvType.TvSeries
-            href.contains("anime") -> TvType.Anime
-            else -> TvType.Movie
-        }
+        val fixedUrl = fixUrl(href)
 
-        return newTvSeriesSearchResponse(title, fixUrl(href), type) {
+        return newMovieSearchResponse(title, fixedUrl) {
             this.posterUrl = poster
         }
     }
