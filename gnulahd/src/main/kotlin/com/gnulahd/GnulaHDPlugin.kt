@@ -1,13 +1,12 @@
-package com.byayzen
+package com.gnulahd
 
-import com.lagradost.cloudstream3.plugins.*
+import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
+import com.lagradost.cloudstream3.plugins.Plugin
+import android.content.Context
 
 @CloudstreamPlugin
-class GnulaHDPlugin : BasePlugin() {
-    override fun load() {
+class GnulaPlugin : Plugin() {
+    override fun load(context: Context) {
         registerMainAPI(GnulaHD())
-
-        registerExtractorAPI(Voe())
-        registerExtractorAPI(FileMoon())
     }
 }
