@@ -1,11 +1,11 @@
 package com.gnulahd
 
+import android.content.Context
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
-import android.content.Context
 
 @CloudstreamPlugin
-class GnulaPlugin : Plugin() {
+class GnulaHDPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(GnulaHD())
     }
