@@ -6,117 +6,112 @@ import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
+
 class Pelisplusto : MainAPI() {
 
-    override var mainUrl = "https://pelisplus.to"
-    override var name = "Pelisplus.to"
+    override var mainUrl = "https://tioplus.app"
+    override var name = "Pelisplus"
     override var lang = "es"
 
     override val hasMainPage = true
     override val hasQuickSearch = true
-    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
+    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
     private val headers = mapOf(
         "User-Agent" to USER_AGENT,
-        "Referer" to mainUrl
+        "Referer" to mainUrl,
+        "Origin" to mainUrl
     )
 
-    // =============================
-    // 🔥 HOME
-    // =============================
-
+    // 🔥 CATEGORÍAS PRO
     override val mainPage = mainPageOf(
         "$mainUrl/peliculas/page/" to "Películas",
         "$mainUrl/series/page/" to "Series",
-        "$mainUrl/animes/page/" to "Animes"
+        "$mainUrl/animes/page/" to "Animes",
+        "$mainUrl/doramas/page/" to "Doramas"
     )
+
+    // 🔥 FIX IMAGEN (CLAVE)
+    private fun Element.getImage(): String? {
+        val img = selectFirst("img") ?: return null
+
+        return img.attr("data-src")
+            .ifEmpty { img.attr("data-lazy-src") }
+            .ifEmpty { img.attr("src") }
+    }
+
+    private fun Element.toSearchResult(): SearchResponse? {
+        val href = attr("href")
+        val title = selectFirst("span, h2, h3")?.text() ?: return null
+        val poster = getImage()
+
+        return if (href.contains("/pelicula/")) {
+            newMovieSearchResponse(title, href, TvType.Movie) {
+                this.posterUrl = poster
+            }
+        } else {
+            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+                this.posterUrl = poster
+            }
+        }
+    }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val doc = app.get("${request.data}$page", headers = headers).document
 
-        val items = doc.select("article.item.liste.relative a.itemA")
+        val items = doc.select("article.item a.itemA")
             .mapNotNull { it.toSearchResult() }
 
         return newHomePageResponse(request.name, items)
     }
 
-    // =============================
-    // 🔥 PARSER LIMPIO
-    // =============================
-
-    private fun Element.toSearchResult(): SearchResponse? {
-        val href = attr("href")
-        val title = selectFirst("h2")?.text()?.substringBefore(" (") ?: return null
-        val poster = selectFirst("img")?.attr("data-src")
-
-        return when {
-            href.contains("/pelicula/") -> newMovieSearchResponse(title, href, TvType.Movie) {
-                this.posterUrl = poster
-            }
-
-            href.contains("/serie/") -> newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-                this.posterUrl = poster
-            }
-
-            href.contains("/anime/") -> newTvSeriesSearchResponse(title, href, TvType.Anime) {
-                this.posterUrl = poster
-            }
-
-            else -> null
-        }
-    }
-
-    // =============================
-    // 🔥 SEARCH
-    // =============================
-
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/search/${URLEncoder.encode(query, "UTF-8")}"
-        val doc = app.get(url, headers = headers).document
+        val doc = app.get(
+            "$mainUrl/search/${URLEncoder.encode(query, "UTF-8")}",
+            headers = headers
+        ).document
 
-        return doc.select("article.item.liste.relative a.itemA")
+        return doc.select("article.item a.itemA")
             .mapNotNull { it.toSearchResult() }
     }
-
-    // =============================
-    // 🔥 LOAD
-    // =============================
 
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url, headers = headers).document
 
-        val title = doc.selectFirst("h1.slugh1")?.text()?.substringBefore(" (") ?: "Sin título"
+        val title = doc.selectFirst("h1")?.text() ?: "Sin título"
+        val plot = doc.selectFirst("p")?.text()
+
+        // 🔥 BACKDROP PRO (como cuevana)
+        val backdropStyle = doc.selectFirst(".bg")?.attr("style")
+        val backdrop = Regex("""url\("(.*?)"\)""")
+            .find(backdropStyle ?: "")?.groupValues?.get(1)
 
         val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")
 
-        val plot = doc.selectFirst("div.description p")?.text()
+        val episodes = doc.select("ul li a").mapNotNull { ep ->
+            val href = ep.attr("href")
 
-        val episodes = doc.select(".divide-y li a").mapNotNull { ep ->
-            val epTitle = ep.text()
-            val number = Regex("""\d+""").find(epTitle)?.value?.toIntOrNull()
-
-            newEpisode(ep.attr("href")) {
-                this.name = epTitle
-                this.episode = number
-            }
+            if (href.contains("/episode/")) {
+                newEpisode(href) {
+                    this.name = ep.text()
+                }
+            } else null
         }
 
         return if (episodes.isNotEmpty()) {
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
+                this.backgroundPosterUrl = backdrop
                 this.plot = plot
             }
         } else {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
+                this.backgroundPosterUrl = backdrop
                 this.plot = plot
             }
         }
     }
-
-    // =============================
-    // 🔥 SERVERS (LO IMPORTANTE)
-    // =============================
 
     override suspend fun loadLinks(
         data: String,
@@ -127,34 +122,25 @@ class Pelisplusto : MainAPI() {
 
         val doc = app.get(data, headers = headers).document
 
-        val servers = doc.select(".bg-tabs ul li")
+
+
+        val servers = doc.select("ul.bg-tabs li, .bg-tabs li")
+
+        var found = false
 
         servers.forEach { li ->
-            try {
-                val base64 = li.attr("data-server")
-                if (base64.isBlank()) return@forEach
+            val base64 = li.attr("data-server")
+            if (base64.isBlank()) return@forEach
 
-                val decoded = String(Base64.decode(base64, Base64.DEFAULT))
+            val resolved = PelisplusResolver.resolve(base64, data)
 
-                if (decoded.contains("http")) {
-                    loadExtractor(decoded, mainUrl, subtitleCallback, callback)
-                } else {
-                    // 🔥 fallback player
-                    val playerUrl = "$mainUrl/player/${Base64.encodeToString(base64.toByteArray(), Base64.DEFAULT).trim()}"
-                    val playerDoc = app.get(playerUrl, headers = headers).document
-
-                    val video = playerDoc.selectFirst("script")
-                        ?.data()
-                        ?.let { Regex("""https?://[^\s'"]+""").find(it)?.value }
-
-                    if (!video.isNullOrEmpty()) {
-                        loadExtractor(video, mainUrl, subtitleCallback, callback)
-                    }
+            if (!resolved.isNullOrEmpty()) {
+                if (loadExtractor(resolved, data, subtitleCallback, callback)) {
+                    found = true
                 }
-
-            } catch (_: Throwable) {}
+            }
         }
 
-        return true
+        return found
     }
 }

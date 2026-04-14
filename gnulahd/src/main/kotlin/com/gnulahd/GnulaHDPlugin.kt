@@ -1,4 +1,4 @@
-package com.byayzen
+package com.gnulahd
 
 import com.lagradost.cloudstream3.plugins.*
 
@@ -7,7 +7,7 @@ class GnulaHDPlugin : BasePlugin() {
     override fun load() {
         registerMainAPI(GnulaHD())
 
-        registerExtractorAPI(Voe())
-        registerExtractorAPI(FileMoon())
+        //registerExtractorAPI(Voe())
+        //registerExtractorAPI(FileMoon())
     }
 }
