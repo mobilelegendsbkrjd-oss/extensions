@@ -1,0 +1,43 @@
+name: Build Cloudstream Extension (.cs3)
+
+on:
+  workflow_dispatch:
+    inputs:
+      extension:
+        description: 'Nombre del módulo (ej: gnulahd)'
+        required: true
+        default: 'gnulahd'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Permisos gradle
+        run: chmod +x gradlew
+
+      - name: Setup Android SDK
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
+      # 🔥 AQUI ESTÁ LO IMPORTANTE
+      - name: Build CS3 (make)
+        run: ./gradlew :${{ github.event.inputs.extension }}:make
+
+      # 📦 SUBIR EL CS3
+      - name: Upload CS3
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.extension }}-cs3
+          path: |
+            **/*.cs3
