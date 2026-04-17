@@ -11,7 +11,7 @@ class EstrenosAnime : MainAPI() {
 
     override var mainUrl = "https://estrenosanime.net"
     override var name = "EstrenosAnime"
-    override var lang = "es"
+    override var lang = "mx"
     override val hasMainPage = true
 
     override val supportedTypes = setOf(
@@ -49,7 +49,7 @@ class EstrenosAnime : MainAPI() {
 
     private fun parseCards(doc: Document): List<SearchResponse> {
         return doc.select(
-            ".tick.ltr, .flw-item, .swiper-slide .flw-item"
+            ".flw-item, .swiper-slide .flw-item, .film_list-wrap .flw-item"
         ).mapNotNull { card ->
 
             val a = card.selectFirst("a[href]") ?: return@mapNotNull null
@@ -60,22 +60,27 @@ class EstrenosAnime : MainAPI() {
                 !href.contains("/pelicula/")
             ) return@mapNotNull null
 
-            val title =
-                a.attr("title")
-                    .ifBlank {
-                        card.selectFirst("h3,.film-name")
-                            ?.text()
-                            ?: ""
-                    }.trim()
+            val title = a.attr("title")
+                .ifBlank {
+                    card.selectFirst("h3,.film-name")
+                        ?.text()
+                        ?: ""
+                }
+                .trim()
 
             if (title.isBlank()) return@mapNotNull null
 
             val poster = imgAttr(card.selectFirst("img"))
 
+            val fullText = (
+                    title + " " +
+                            card.text()
+                    ).lowercase()
+
             val type =
                 if (
-                    href.contains("pelicula") ||
-                    card.text().contains("pelicula", true)
+                    href.contains("pelicula", true) ||
+                    fullText.contains("pelicula")
                 ) TvType.AnimeMovie
                 else TvType.Anime
 
@@ -85,6 +90,31 @@ class EstrenosAnime : MainAPI() {
                 type
             ) {
                 this.posterUrl = poster
+
+                // =====================================
+                // ETIQUETAS PROFESIONALES
+                // =====================================
+                when {
+                    fullText.contains("dual") -> {
+                        addQuality("DUAL")
+                    }
+
+                    fullText.contains("latino") ||
+                            fullText.contains(" lat ") ||
+                            fullText.contains("lat)") ||
+                            fullText.contains("lat]") -> {
+                        addQuality("LAT")
+                    }
+
+                    fullText.contains("castellano") ||
+                            fullText.contains("cast") -> {
+                        addQuality("CAS")
+                    }
+
+                    else -> {
+                        addQuality("SUB")
+                    }
+                }
             }
 
         }.distinctBy { it.url }
@@ -175,7 +205,16 @@ class EstrenosAnime : MainAPI() {
 
         val poster =
             imgAttr(
-                doc.selectFirst("img")
+                doc.selectFirst(
+                    ".film-poster img, .anime-poster img, .poster img, .thumb img, .item img, .film-thumb img"
+                )
+            ) ?: imgAttr(
+                doc.select("img").firstOrNull {
+                    val s = it.outerHtml().lowercase()
+                    !s.contains("logo") &&
+                            !s.contains("header") &&
+                            !s.contains("icon")
+                }
             )
 
         val plot =
@@ -297,7 +336,6 @@ class EstrenosAnime : MainAPI() {
     // LOAD LINKS
     // ==================================================
 
-    // REEMPLAZA SOLO TU MÉTODO loadLinks() POR ESTE COMPLETO
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -305,164 +343,222 @@ class EstrenosAnime : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        val episodeUrl = data
-        val extracted = mutableSetOf<String>()
         var found = false
+        val used = mutableSetOf<String>()
+
+        suspend fun addUrl(
+            url: String,
+            referer: String?
+        ) {
+            val final = url.trim()
+            if (final.isBlank()) return
+            if (!used.add(final)) return
+
+            try {
+                val ok = UniversalExtractor.resolve(
+                    final,
+                    referer,
+                    subtitleCallback,
+                    callback
+                )
+
+                if (ok) {
+                    found = true
+                    return
+                }
+            } catch (_: Exception) {
+            }
+
+            try {
+                loadExtractor(
+                    final,
+                    referer,
+                    subtitleCallback
+                ) {
+                    found = true
+                    callback(it)
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        suspend fun processEpisode(
+            watchUrl: String,
+            episodeId: String
+        ) {
+            try {
+                val headers = mapOf(
+                    "Referer" to watchUrl,
+                    "X-Requested-With" to "XMLHttpRequest"
+                )
+
+                val servers = app.get(
+                    "$mainUrl/ajax/v2/episode/servers?episodeId=$episodeId",
+                    headers = headers
+                ).text
+                    .replace("\\/", "/")
+                    .replace("\\\"", "\"")
+
+                val serverIds = Regex("""data-id=["'](\d+)""")
+                    .findAll(servers)
+                    .map { it.groupValues[1] }
+                    .distinct()
+                    .toList()
+
+                for (sid in serverIds) {
+
+                    try {
+                        val src = app.get(
+                            "$mainUrl/ajax/v2/episode/sources?id=$sid",
+                            headers = headers
+                        ).text
+                            .replace("\\/", "/")
+                            .replace("\\\"", "\"")
+
+                        val newUrl =
+                            Regex(""""link"\s*:\s*"([^"]+)"""")
+                                .find(src)
+                                ?.groupValues
+                                ?.getOrNull(1)
+                                ?: continue
+
+                        // estilo balandro:
+                        // entra al link intermedio y saca tokens go_to_player(...)
+                        try {
+                            val html = app.get(
+                                newUrl,
+                                referer = watchUrl
+                            ).text
+
+                            val encrypted = Regex(
+                                """go_to_player\(['"]([^'"]+)"""
+                            ).findAll(html)
+                                .map { it.groupValues[1] }
+                                .distinct()
+                                .toList()
+
+                            if (encrypted.isNotEmpty()) {
+
+                                for (token in encrypted) {
+                                    try {
+                                        val body =
+                                            """{"encrypted":"$token"}"""
+                                                .toRequestBody(
+                                                    "application/json"
+                                                        .toMediaTypeOrNull()
+                                                )
+
+                                        val dec = app.post(
+                                            "https://multiserver.icu/embed/api/decrypt-stream",
+                                            requestBody = body,
+                                            headers = mapOf(
+                                                "Content-Type" to "application/json",
+                                                "Referer" to newUrl
+                                            )
+                                        ).text
+                                            .replace("\\/", "/")
+                                            .replace("\\\"", "\"")
+
+                                        val real =
+                                            Regex(""""url"\s*:\s*"([^"]+)"""")
+                                                .find(dec)
+                                                ?.groupValues
+                                                ?.getOrNull(1)
+
+                                        if (!real.isNullOrBlank()) {
+                                            addUrl(real, newUrl)
+                                        }
+                                    } catch (_: Exception) {
+                                    }
+                                }
+
+                            } else {
+                                addUrl(newUrl, watchUrl)
+                            }
+
+                        } catch (_: Exception) {
+                            addUrl(newUrl, watchUrl)
+                        }
+
+                    } catch (_: Exception) {
+                    }
+                }
+
+            } catch (_: Exception) {
+            }
+        }
 
         try {
-            val pageHtml = app.get(
-                episodeUrl,
+
+            // ==================================================
+            // CASO 1: YA ES PAGINA /ver/
+            // ==================================================
+            if (data.contains("/ver/")) {
+
+                val html = app.get(
+                    data,
+                    referer = mainUrl
+                ).text
+
+                val episodeId =
+                    Regex("""data-episode-id=["'](\d+)""")
+                        .find(html)
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?: Regex("""data-epid=["'](\d+)""")
+                            .find(html)
+                            ?.groupValues
+                            ?.getOrNull(1)
+                        ?: Regex("""[?&]ep=(\d+)""")
+                            .find(data)
+                            ?.groupValues
+                            ?.getOrNull(1)
+
+                if (!episodeId.isNullOrBlank()) {
+                    processEpisode(data, episodeId)
+                }
+
+                return found
+            }
+
+            // ==================================================
+            // CASO 2: FICHA ANIME / PELICULA
+            // BUSCAR PRIMER WATCH PAGE (como balandro)
+            // ==================================================
+            val html = app.get(
+                data,
                 referer = mainUrl
             ).text
 
-            val episodeId =
-                Regex("""data-episode-id="(\d+)"""")
-                    .find(pageHtml)
-                    ?.groupValues
-                    ?.getOrNull(1)
-                    ?: Regex("""ep=(\d+)""")
-                        .find(episodeUrl)
+            val watchUrl =
+                Regex("""href=["']([^"']*/ver/[^"']+)["']""")
+                    .findAll(html)
+                    .map { fixUrl(it.groupValues[1]) }
+                    .firstOrNull()
+
+            if (!watchUrl.isNullOrBlank()) {
+
+                val watchHtml = app.get(
+                    watchUrl,
+                    referer = data
+                ).text
+
+                val episodeId =
+                    Regex("""data-episode-id=["'](\d+)""")
+                        .find(watchHtml)
                         ?.groupValues
                         ?.getOrNull(1)
-                    ?: return false
-
-            val ajaxHeaders = mapOf(
-                "X-Requested-With" to "XMLHttpRequest",
-                "Referer" to episodeUrl
-            )
-
-            // ======================================
-            // SERVERS
-            // ======================================
-            val serversRes = app.get(
-                "$mainUrl/ajax/v2/episode/servers?episodeId=$episodeId",
-                headers = ajaxHeaders
-            ).text
-                .replace("\\/", "/")
-                .replace("\\\"", "\"")
-
-            val serverIds = Regex("""data-id="(\d+)"""")
-                .findAll(serversRes)
-                .map { it.groupValues[1] }
-                .distinct()
-                .toList()
-
-            for (sid in serverIds) {
-
-                try {
-                    val sourceRes = app.get(
-                        "$mainUrl/ajax/v2/episode/sources?id=$sid",
-                        headers = ajaxHeaders
-                    ).text
-                        .replace("\\/", "/")
-                        .replace("\\\"", "\"")
-
-                    val multiUrl =
-                        Regex(
-                            """"link"\s*:\s*"([^"]+)""""
-                        ).find(sourceRes)
+                        ?: Regex("""data-epid=["'](\d+)""")
+                            .find(watchHtml)
                             ?.groupValues
                             ?.getOrNull(1)
-                            ?: Regex("""https?://[^\s"'<>]+""")
-                                .find(sourceRes)
-                                ?.value
-                            ?: continue
+                        ?: Regex("""[?&]ep=(\d+)""")
+                            .find(watchUrl)
+                            ?.groupValues
+                            ?.getOrNull(1)
 
-                    if (!extracted.add(multiUrl))
-                        continue
-
-                    val multiHtml = app.get(
-                        multiUrl,
-                        referer = episodeUrl
-                    ).text
-
-                    val tokens = Regex(
-                        """go_to_player\(['"]([^'"]+)"""
-                    ).findAll(multiHtml)
-                        .map { it.groupValues[1] }
-                        .distinct()
-                        .toList()
-
-                    // fallback directo
-                    if (tokens.isEmpty()) {
-                        loadExtractor(
-                            multiUrl,
-                            episodeUrl,
-                            subtitleCallback,
-                            callback
-                        )
-                        found = true
-                    }
-
-                    for (token in tokens) {
-
-                        try {
-
-                            val jsonBody =
-                                """{"encrypted":"$token"}"""
-                                    .toRequestBody(
-                                        "application/json".toMediaTypeOrNull()
-                                    )
-
-                            val dec = app.post(
-                                "https://multiserver.icu/embed/api/decrypt-stream",
-                                requestBody = jsonBody,
-                                headers = mapOf(
-                                    "Content-Type" to "application/json",
-                                    "Referer" to multiUrl
-                                )
-                            ).text
-                                .replace("\\/", "/")
-                                .replace("\\\"", "\"")
-
-                            val realUrl =
-                                Regex(
-                                    """"url"\s*:\s*"([^"]+)""""
-                                ).find(dec)
-                                    ?.groupValues
-                                    ?.getOrNull(1)
-                                    ?: Regex("""https?://[^\s"'<>]+""")
-                                        .find(dec)
-                                        ?.value
-                                    ?: continue
-
-                            if (!extracted.add(realUrl))
-                                continue
-
-                            // ==================================
-                            // PRIORIDAD BIGWARP
-                            // ==================================
-                            if (
-                                realUrl.contains("bigwarp", true) ||
-                                realUrl.contains("bgwp.cc", true)
-                            ) {
-                                BigwarpIO().getUrl(
-                                    realUrl,
-                                    episodeUrl,
-                                    subtitleCallback,
-                                    callback
-                                )
-                                found = true
-                                continue
-                            }
-
-                            // ==================================
-                            // NORMAL EXTRACTOR
-                            // ==================================
-                            loadExtractor(
-                                realUrl,
-                                episodeUrl,
-                                subtitleCallback,
-                                callback
-                            )
-
-                            found = true
-
-                        } catch (_: Exception) {
-                        }
-                    }
-
-                } catch (_: Exception) {
+                if (!episodeId.isNullOrBlank()) {
+                    processEpisode(watchUrl, episodeId)
                 }
             }
 

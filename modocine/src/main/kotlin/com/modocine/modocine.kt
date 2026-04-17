@@ -163,93 +163,111 @@ class ModoCine : MainAPI() {
 
     // LoadLinks (mantengo el tuyo)
     override suspend fun loadLinks(
-    data: String,
-    isCasting: Boolean,
-    subtitleCallback: (SubtitleFile) -> Unit,
-    callback: (ExtractorLink) -> Unit
-): Boolean {
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
 
-    val tmdbId = Regex("id=(\\d+)").find(data)?.groupValues?.get(1) ?: return false
-    val isTv = data.contains("type=tv")
+        val tmdbId =
+            Regex("id=(\\d+)").find(data)
+                ?.groupValues?.get(1)
+                ?: return false
 
-    val season = if (isTv)
-        Regex("season=(\\d+)").find(data)?.groupValues?.get(1) ?: "1"
-    else null
+        val isTv = data.contains("type=tv")
 
-    val episode = if (isTv)
-        Regex("episode=(\\d+)").find(data)?.groupValues?.get(1) ?: "1"
-    else null
+        val season = Regex("season=(\\d+)")
+            .find(data)?.groupValues?.get(1) ?: "1"
 
-    val apiUrl = if (isTv) {
-        "$playerUrl/play.php/embed/tv/$tmdbId/$season/$episode?api=1"
-    } else {
-        "$playerUrl/play.php/embed/movie/$tmdbId?api=1"
-    }
+        val episode = Regex("episode=(\\d+)")
+            .find(data)?.groupValues?.get(1) ?: "1"
 
-    val json = app.get(
-        apiUrl,
-        headers = mapOf("Referer" to playerUrl)
-    ).parsedSafe<JSONObject>() ?: JSONObject(
-        app.get(apiUrl, headers = mapOf("Referer" to playerUrl)).text
-    )
+        val apiUrl =
+            if (isTv)
+                "$playerUrl/play.php/embed/tv/$tmdbId/$season/$episode?api=1"
+            else
+                "$playerUrl/play.php/embed/movie/$tmdbId?api=1"
 
-    if (!json.optBoolean("success")) return false
+        val apiText = app.get(
+            apiUrl,
+            headers = mapOf("Referer" to playerUrl)
+        ).text
 
-    val dataArray = json.getJSONArray("data")
+        val json = JSONObject(apiText)
 
-    var embedUrl: String? = null
+        if (!json.optBoolean("success")) return false
 
-    // prioridad latino
-    for (i in 0 until dataArray.length()) {
-        val item = dataArray.getJSONObject(i)
-        val lang = item.optString("language").lowercase()
+        val arr = json.getJSONArray("data")
 
-        if (lang.contains("latino")) {
-            embedUrl = item.optString("embed_url")
-            break
+        var found = false
+
+        for (i in 0 until arr.length()) {
+
+            val item = arr.getJSONObject(i)
+
+            val lang = item.optString("language")
+            val embedUrl = item.optString("embed_url")
+
+            if (embedUrl.isBlank()) continue
+
+            val page = app.get(
+                embedUrl,
+                headers = mapOf(
+                    "Referer" to playerUrl,
+                    "User-Agent" to USER_AGENT
+                )
+            ).text
+
+            val links = mutableSetOf<String>()
+
+            Regex("""https?:\/\/play\.modocine\.com\/hls\/[^"'\\ ]+\.m3u8[^"'\\ ]*""")
+                .findAll(page)
+                .forEach { links.add(it.value) }
+
+            Regex("""https?:\/\/[^"'\\ ]+\.m3u8[^"'\\ ]*""")
+                .findAll(page)
+                .forEach { links.add(it.value) }
+
+            Regex(""""file"\s*:\s*"([^"]+\.m3u8[^"]*)"""")
+                .findAll(page)
+                .forEach { links.add(it.groupValues[1]) }
+
+            Regex(""""source"\s*:\s*"([^"]+\.m3u8[^"]*)"""")
+                .findAll(page)
+                .forEach { links.add(it.groupValues[1]) }
+
+            for (link in links) {
+
+                callback.invoke(
+                    ExtractorLink(
+                        source = name,
+                        name = "$name $lang",
+                        url = link,
+                        referer = playerUrl,
+                        quality = Qualities.Unknown.value,
+                        type = ExtractorLinkType.M3U8
+                    )
+                )
+
+                found = true
+            }
+
+            if (!found) {
+                try {
+                    loadExtractor(
+                        embedUrl,
+                        playerUrl,
+                        subtitleCallback,
+                        callback
+                    )
+                    found = true
+                } catch (_: Exception) {
+                }
+            }
         }
+
+        return found
     }
-
-    // fallback primer server
-    if (embedUrl.isNullOrBlank()) {
-        embedUrl = dataArray.getJSONObject(0).optString("embed_url")
-    }
-
-    if (embedUrl.isNullOrBlank()) return false
-
-    val embedPage = app.get(
-        embedUrl,
-        headers = mapOf(
-            "Referer" to playerUrl,
-            "User-Agent" to USER_AGENT
-        )
-    ).text
-
-    val links = mutableSetOf<String>()
-
-    Regex("""https?://play\.modocine\.com/hls/[^"'\\s]+\.m3u8[^"'\\s]*""")
-        .findAll(embedPage)
-        .forEach { links.add(it.value) }
-
-    Regex("""https?:\/\/[^"'\\s]+\.m3u8[^"'\\s]*""")
-        .findAll(embedPage)
-        .forEach { links.add(it.value) }
-
-    links.forEach { link ->
-        callback(
-            ExtractorLink(
-                source = "ModoCine",
-                name = "ModoCine Latino",
-                url = link,
-                referer = playerUrl,
-                quality = Qualities.Unknown.value,
-                type = ExtractorLinkType.M3U8
-            )
-        )
-    }
-
-    return links.isNotEmpty()
-}
 
     data class LoadExploreResponse(
         val success: Boolean,
