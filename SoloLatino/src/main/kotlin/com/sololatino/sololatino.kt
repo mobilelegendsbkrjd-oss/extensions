@@ -210,43 +210,55 @@ class SoloLatino : MainAPI() {
 
         val doc = app.get(data).document
 
-        // Capturamos los servidores de los botones (como ya lo hacías)
+        // Capturamos los servidores de los botones
         val servers = doc.select("button.server-btn")
             .mapNotNull { it.attr("data-server-url") }
 
         val extracted = mutableSetOf<String>()
 
         for (server in servers) {
+
             val fixedServer = fixHostsLinks(server)
 
-            // 1. Manejo específico para el nuevo extractor de SoloLatino/Overflow
+            // =========================
+            // SOLOLATINO EMBED
+            // =========================
             if (fixedServer.contains("re.sololatino.net")) {
+
                 SoloLatinoEmbed().getUrl(
                     fixedServer,
                     data,
                     subtitleCallback,
                     callback
                 )
-                extracted.add(fixedServer) // Marcamos como extraído para el return final
+
+                extracted.add(fixedServer)
                 continue
             }
 
-            // 2. Tu lógica existente para Xupalace
+            // =========================
+            // XUPALACE
+            // =========================
             if (fixedServer.contains("xupalace")) {
+
                 XupalaceExtractor().getUrl(
                     fixedServer,
                     data,
                     subtitleCallback,
                     callback
                 )
+
                 extracted.add(fixedServer)
                 continue
             }
 
-            // 3. Lógica para otros iframes y servidores genéricos
+            // =========================
+            // OTROS SERVERS
+            // =========================
             val links = getServersFromIframe(server, data)
 
             links.forEach { link ->
+
                 val fixed = fixHostsLinks(link)
 
                 val refererFinal = if (
@@ -256,7 +268,13 @@ class SoloLatino : MainAPI() {
                 ) server else data
 
                 if (extracted.add(fixed)) {
-                    loadExtractor(fixed, refererFinal, subtitleCallback, callback)
+
+                    loadExtractor(
+                        fixed,
+                        refererFinal,
+                        subtitleCallback,
+                        callback
+                    )
                 }
             }
         }
