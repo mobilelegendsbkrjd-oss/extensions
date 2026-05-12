@@ -9,7 +9,7 @@ class SoloLatino : MainAPI() {
     override var mainUrl = "https://sololatino.net"
     override var name = "SoloLatino"
     override val hasMainPage = true
-    override var lang = "mx"
+    override var lang = "es"
 
     override val supportedTypes = setOf(
         TvType.Movie,
@@ -48,40 +48,20 @@ class SoloLatino : MainAPI() {
     // =========================
     // MAIN PAGE
     // =========================
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
 
+        val doc = app.get(mainUrl).document
         val lists = mutableListOf<HomePageList>()
 
-        val sections = listOf(
-            "Películas Recientes" to "$mainUrl/peliculas?page=$page",
-            "Series Recientes" to "$mainUrl/series?page=$page",
-            "Animes" to "$mainUrl/animes?page=$page",
-            "Doramas" to "$mainUrl/doramas?page=$page",
-            "Netflix" to "$mainUrl/red/netflix?page=$page",
-            "Amazon Prime Video" to "$mainUrl/red/amazon-prime-video?page=$page",
-            "Disney+" to "$mainUrl/red/disney?page=$page",
-            "Apple TV+" to "$mainUrl/red/apple-tv?page=$page",
-            "Tv Tokyo" to "$mainUrl/red/tv-tokyo?page=$page",
-            "Tokyo MX" to "$mainUrl/red/tokyo-mx?page=$page"
-        )
+        doc.select("section").forEach { section ->
 
-        sections.forEach { (title, url) ->
-            try {
-                val doc = app.get(url).document
+            val title = section.selectFirst("h2, .section-title")?.text() ?: return@forEach
 
-                val items = parseCards(doc)
-                    .filter { it.name.isNotBlank() }
-                    .distinctBy { it.url.substringBefore("?") }
+            val items = parseCards(section)
 
-                if (items.isNotEmpty()) {
-                    lists.add(HomePageList(title, items))
-                }
+            if (items.size < 3) return@forEach
 
-            } catch (_: Exception) {
-            }
+            lists.add(HomePageList(title, items))
         }
 
         return newHomePageResponse(lists)
@@ -108,12 +88,11 @@ class SoloLatino : MainAPI() {
 
                     if (items.isEmpty()) break
                     results.addAll(items)
-                } catch (_: Exception) {
-                }
+                } catch (_: Exception) {}
             }
         }
 
-        return results.distinctBy { it.url.substringBefore("?") }
+        return results.distinctBy { it.url }
     }
 
     // =========================
@@ -155,10 +134,7 @@ class SoloLatino : MainAPI() {
                     ?.toIntOrNull()
 
                 val season = Regex("""temporada-(\d+)""")
-                    .find(epUrl)
-                    ?.groupValues
-                    ?.getOrNull(1)
-                    ?.toIntOrNull() ?: 1
+                    .find(epUrl)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
 
                 val epTitle = ep.selectFirst("p.text-sm, p.leading-tight")
                     ?.text()
@@ -210,7 +186,6 @@ class SoloLatino : MainAPI() {
 
         val doc = app.get(data).document
 
-        // Capturamos los servidores de los botones
         val servers = doc.select("button.server-btn")
             .mapNotNull { it.attr("data-server-url") }
 
@@ -232,7 +207,6 @@ class SoloLatino : MainAPI() {
                     callback
                 )
 
-                extracted.add(fixedServer)
                 continue
             }
 
@@ -248,7 +222,6 @@ class SoloLatino : MainAPI() {
                     callback
                 )
 
-                extracted.add(fixedServer)
                 continue
             }
 
@@ -295,10 +268,7 @@ class SoloLatino : MainAPI() {
             val doc = res.document
 
             Regex("""dataLink\s*=\s*(\[.*?\]);""")
-                .find(html)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.let { json ->
+                .find(html)?.groupValues?.getOrNull(1)?.let { json ->
 
                     val parsed = AppUtils.tryParseJson<List<Map<String, Any>>>(json)
                         ?: return@let
@@ -326,8 +296,7 @@ class SoloLatino : MainAPI() {
                 }
             }
 
-        } catch (_: Exception) {
-        }
+        } catch (_: Exception) {}
 
         return results.distinct()
     }
@@ -344,9 +313,7 @@ class SoloLatino : MainAPI() {
             val json = String(Base64.decode(payload, Base64.DEFAULT))
 
             Regex("\"link\":\"(.*?)\"")
-                .find(json)
-                ?.groupValues
-                ?.getOrNull(1)
+                .find(json)?.groupValues?.getOrNull(1)
 
         } catch (_: Exception) {
             null
@@ -358,11 +325,17 @@ class SoloLatino : MainAPI() {
             .replace("hglink.to", "streamwish.to")
             .replace("swdyu.com", "streamwish.to")
             .replace("wishembed.com", "streamwish.to")
+
             .replace("vidhide.com", "vidhidepro.com")
+
             .replace("filemoon.link", "filemoon.sx")
+
             .replace("doodstream.com", "dood.la")
+
             .replace("sbfull.com", "watchsb.com")
+
             .replace("uqload.io", "uqload.com")
+
             .replace("voe.sx", "voe.unblockit.cat")
     }
 }
