@@ -210,15 +210,28 @@ class SoloLatino : MainAPI() {
 
         val doc = app.get(data).document
 
+        // Capturamos los servidores de los botones (como ya lo hacías)
         val servers = doc.select("button.server-btn")
             .mapNotNull { it.attr("data-server-url") }
 
         val extracted = mutableSetOf<String>()
 
         for (server in servers) {
-
             val fixedServer = fixHostsLinks(server)
 
+            // 1. Manejo específico para el nuevo extractor de SoloLatino/Overflow
+            if (fixedServer.contains("re.sololatino.net")) {
+                SoloLatinoEmbed().getUrl(
+                    fixedServer,
+                    data,
+                    subtitleCallback,
+                    callback
+                )
+                extracted.add(fixedServer) // Marcamos como extraído para el return final
+                continue
+            }
+
+            // 2. Tu lógica existente para Xupalace
             if (fixedServer.contains("xupalace")) {
                 XupalaceExtractor().getUrl(
                     fixedServer,
@@ -226,9 +239,11 @@ class SoloLatino : MainAPI() {
                     subtitleCallback,
                     callback
                 )
+                extracted.add(fixedServer)
                 continue
             }
 
+            // 3. Lógica para otros iframes y servidores genéricos
             val links = getServersFromIframe(server, data)
 
             links.forEach { link ->
