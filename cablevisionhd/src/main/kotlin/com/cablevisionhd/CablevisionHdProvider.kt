@@ -1,9 +1,16 @@
 package com.cablevisionhd
 
 import android.util.Base64
-import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
-import org.jsoup.nodes.Document
+import com.lagradost.cloudstream3.ExtractorLink
+import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.newMovieLoadResponse
+import com.lagradost.cloudstream3.utils.JsUnpacker
+import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.fixUrl
+import com.lagradost.cloudstream3.utils.fixUrlNull
 
 class CablevisionHdProvider : MainAPI() {
 
@@ -81,15 +88,19 @@ class CablevisionHdProvider : MainAPI() {
 
             // JWPLAYER
             Regex("""source\s*:\s*["']([^"']+)["']"""),
+
             Regex("""sources\s*:\s*\[\s*\{\s*file\s*:\s*["']([^"']+)["']"""),
+
             Regex("""file\s*:\s*["']([^"']+)["']"""),
 
             // VARIABLES
             Regex("""var\s+src\s*=\s*["']([^"']+)["']"""),
+
             Regex("""src\s*:\s*["']([^"']+)["']"""),
 
             // JSON
             Regex(""""url"\s*:\s*"([^"]+)""""),
+
             Regex(""""file"\s*:\s*"([^"]+)"""")
         )
 
@@ -130,21 +141,19 @@ class CablevisionHdProvider : MainAPI() {
                         ) {
 
                             callback.invoke(
-                                newExtractorLink(
+                                ExtractorLink(
                                     source = name,
                                     name = name,
-                                    url = found
-                                ) {
-                                    this.referer = referer
-                                    this.quality = Qualities.Unknown.value
-                                    this.isM3u8 = found.contains(".m3u8")
-
-                                    this.headers = mapOf(
+                                    url = found,
+                                    referer = referer,
+                                    quality = Qualities.Unknown.value,
+                                    isM3u8 = found.contains(".m3u8"),
+                                    headers = mapOf(
                                         "User-Agent" to USER_AGENT,
                                         "Referer" to referer,
                                         "Origin" to mainUrl
                                     )
-                                }
+                                )
                             )
 
                             return true
@@ -181,20 +190,18 @@ class CablevisionHdProvider : MainAPI() {
                                 ) {
 
                                     callback.invoke(
-                                        newExtractorLink(
+                                        ExtractorLink(
                                             source = name,
                                             name = name,
-                                            url = found
-                                        ) {
-                                            this.referer = referer
-                                            this.quality = Qualities.Unknown.value
-                                            this.isM3u8 = found.contains(".m3u8")
-
-                                            this.headers = mapOf(
+                                            url = found,
+                                            referer = referer,
+                                            quality = Qualities.Unknown.value,
+                                            isM3u8 = found.contains(".m3u8"),
+                                            headers = mapOf(
                                                 "User-Agent" to USER_AGENT,
                                                 "Referer" to referer
                                             )
-                                        }
+                                        )
                                     )
 
                                     return true
@@ -226,7 +233,6 @@ class CablevisionHdProvider : MainAPI() {
                                     return@repeat
                                 }
 
-                                // DIRECT URL
                                 if (
                                     decoded.contains(".m3u8") ||
                                     decoded.contains(".mp4")
@@ -240,21 +246,18 @@ class CablevisionHdProvider : MainAPI() {
                                     if (!stream.isNullOrBlank()) {
 
                                         callback.invoke(
-                                            newExtractorLink(
+                                            ExtractorLink(
                                                 source = name,
                                                 name = name,
-                                                url = clean(stream)
-                                            ) {
-                                                this.referer = referer
-                                                this.quality = Qualities.Unknown.value
-                                                this.isM3u8 =
-                                                    stream.contains(".m3u8")
-
-                                                this.headers = mapOf(
+                                                url = clean(stream),
+                                                referer = referer,
+                                                quality = Qualities.Unknown.value,
+                                                isM3u8 = stream.contains(".m3u8"),
+                                                headers = mapOf(
                                                     "User-Agent" to USER_AGENT,
                                                     "Referer" to referer
                                                 )
-                                            }
+                                            )
                                         )
 
                                         return true
@@ -309,26 +312,6 @@ class CablevisionHdProvider : MainAPI() {
 
                         return@repeat
                     }
-                }
-
-                // =========================================
-                // EMBED SEARCH
-                // =========================================
-
-                val embed =
-                    Regex("""https?://[^\s"'\\]+(?:embed|player|stream)[^\s"'\\]*""")
-                        .find(html)
-                        ?.value
-
-                if (
-                    !embed.isNullOrBlank() &&
-                    embed != currentUrl
-                ) {
-
-                    referer = currentUrl
-                    currentUrl = clean(embed)
-
-                    return@repeat
                 }
 
                 return false
