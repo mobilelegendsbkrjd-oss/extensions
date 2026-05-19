@@ -1,8 +1,10 @@
 package com.sololatino
 
 import android.util.Base64
-import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.*
+import kotlin.text.Regex
 
 object Embed69Extractor {
 
@@ -13,89 +15,255 @@ object Embed69Extractor {
         callback: (ExtractorLink) -> Unit
     ) {
 
-        val html = app.get(url, headers = mapOf("Referer" to referer)).text
+        try {
 
-        // =========================
-        // dataLink
-        // =========================
-        Regex("""dataLink\s*=\s*(\[.*?\]);""")
-            .find(html)?.groupValues?.getOrNull(1)?.let { json ->
+            val html = app.get(
+                url,
+                referer = referer
+            ).text
 
-                val parsed = AppUtils.tryParseJson<List<Map<String, Any>>>(json) ?: return
+            // =========================
+            // dataLink JSON
+            // =========================
+            Regex(
+                """dataLink\s*=\s*(\[.*?\]);""",
+                RegexOption.DOT_MATCHES_ALL
+            )
+                .find(html)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.let { json ->
 
-                parsed.forEach { lang ->
-                    val embeds = lang["sortedEmbeds"] as? List<Map<String, Any>> ?: return@forEach
+                    val parsed =
+                        AppUtils.tryParseJson<
+                                List<Map<String, Any>>
+                                >(json)
+                            ?: return@let
 
-                    embeds.forEach { embed ->
+                    parsed.forEach { lang ->
 
-                        val enc = embed["link"] as? String ?: return@forEach
-                        val real = decode(enc) ?: return@forEach
+                        val embeds =
+                            lang["sortedEmbeds"]
+                                    as? List<Map<String, Any>>
+                                ?: return@forEach
 
-                        val fixed = fixHosts(real)
+                        embeds.forEach { embed ->
 
-                        // =========================
-                        // 🔥 XUPALACE FIX REAL
-                        // =========================
-                        if (fixed.contains("xupalace")) {
+                            val enc =
+                                embed["link"] as? String
+                                    ?: return@forEach
 
-                            try {
-                                val htmlX = app.get(
-                                    fixed,
-                                    headers = mapOf(
-                                        "Referer" to url,
-                                        "User-Agent" to USER_AGENT
-                                    )
-                                ).text
+                            val real =
+                                decode(enc)
+                                    ?: return@forEach
 
-                                // 🔥 PARSEO GLOBAL (NO SOLO li)
-                                Regex("""go_to_playerVast\(\s*['"]([^'"]+)""")
-                                    .findAll(htmlX)
-                                    .mapNotNull { it.groupValues.getOrNull(1) }
-                                    .forEach { deep ->
+                            val fixed =
+                                fixHosts(real)
 
-                                        val finalLink = fixHosts(deep)
+                            // =========================
+                            // DIRECTO
+                            // =========================
+                            if (
+                                fixed.contains(".m3u8") ||
+                                fixed.contains(".mp4")
+                            ) {
 
-                                        loadExtractor(
-                                            finalLink,
-                                            fixed, // 👈 IMPORTANTÍSIMO REFERER
-                                            subtitleCallback,
-                                            callback
-                                        )
+                                callback.invoke(
+                                    newExtractorLink(
+                                        "Embed69",
+                                        "Embed69",
+                                        fixed
+                                    ) {
+                                        this.referer = url
+
+                                        if (
+                                            fixed.contains(".m3u8")
+                                        ) {
+                                            this.type =
+                                                ExtractorLinkType.M3U8
+                                        }
                                     }
+                                )
+
+                                return@forEach
+                            }
+
+                            // =========================
+                            // EXTRACTOR NORMAL
+                            // =========================
+                            try {
+
+                                loadExtractor(
+                                    fixed,
+                                    url,
+                                    subtitleCallback,
+                                    callback
+                                )
 
                             } catch (_: Exception) {}
 
-                            return
+                            // =========================
+                            // EXTRA PROFUNDO
+                            // =========================
+                            try {
+
+                                val htmlX =
+                                    app.get(
+                                        fixed,
+                                        referer = url
+                                    ).text
+
+                                Regex(
+                                    """https?:\/\/[^\s"'<>]+"""
+                                )
+                                    .findAll(htmlX)
+                                    .map { it.value }
+                                    .distinct()
+                                    .forEach deep@{ deep ->
+
+                                        val finalLink =
+                                            fixHosts(deep)
+
+                                        if (
+                                            finalLink.contains("m3u8") ||
+                                            finalLink.contains("mp4")
+                                        ) {
+
+                                            callback.invoke(
+                                                newExtractorLink(
+                                                    "Embed69",
+                                                    "Embed69",
+                                                    finalLink
+                                                ) {
+                                                    this.referer =
+                                                        fixed
+
+                                                    if (
+                                                        finalLink.contains(
+                                                            ".m3u8"
+                                                        )
+                                                    ) {
+                                                        this.type =
+                                                            ExtractorLinkType.M3U8
+                                                    }
+                                                }
+                                            )
+
+                                            return@deep
+                                        }
+
+                                        try {
+
+                                            loadExtractor(
+                                                finalLink,
+                                                fixed,
+                                                subtitleCallback,
+                                                callback
+                                            )
+
+                                        } catch (_: Exception) {}
+                                    }
+
+                            } catch (_: Exception) {}
                         }
                     }
                 }
-            }
 
-        // =========================
-        // fallback iframe directo
-        // =========================
-        app.get(url).document.selectFirst("iframe")?.attr("src")?.let {
-            val fixed = fixHosts(it)
-            loadExtractor(fixed, url, subtitleCallback, callback)
-        }
+            // =========================
+            // FALLBACK M3U8
+            // =========================
+            Regex(
+                """https?:\/\/[^\s"'<>]+\.m3u8"""
+            )
+                .findAll(html)
+                .map { it.value }
+                .distinct()
+                .forEach {
+
+                    callback.invoke(
+                        newExtractorLink(
+                            "Embed69",
+                            "Embed69",
+                            it
+                        ) {
+                            this.type =
+                                ExtractorLinkType.M3U8
+
+                            this.referer = url
+                        }
+                    )
+                }
+
+            // =========================
+            // FALLBACK HOSTS
+            // =========================
+            Regex(
+                """https?:\/\/[^\s"'<>]+"""
+            )
+                .findAll(html)
+                .map { it.value }
+                .distinct()
+                .forEach {
+
+                    val fixed =
+                        fixHosts(it)
+
+                    try {
+
+                        loadExtractor(
+                            fixed,
+                            url,
+                            subtitleCallback,
+                            callback
+                        )
+
+                    } catch (_: Exception) {}
+                }
+
+        } catch (_: Exception) {}
     }
 
     // =========================
-    // BASE64 decode
+    // JWT BASE64
     // =========================
-    private fun decode(enc: String): String? {
+    private fun decode(
+        enc: String
+    ): String? {
+
         return try {
-            val parts = enc.split(".")
-            if (parts.size != 3) return null
 
-            var payload = parts[1]
-            val pad = payload.length % 4
-            if (pad != 0) payload += "=".repeat(4 - pad)
+            val parts =
+                enc.split(".")
 
-            val json = String(Base64.decode(payload, Base64.DEFAULT))
+            if (parts.size != 3) {
+                return null
+            }
 
-            Regex("\"link\":\"(.*?)\"")
-                .find(json)?.groupValues?.getOrNull(1)
+            var payload =
+                parts[1]
+
+            val pad =
+                payload.length % 4
+
+            if (pad != 0) {
+                payload += "=".repeat(
+                    4 - pad
+                )
+            }
+
+            val json = String(
+                Base64.decode(
+                    payload,
+                    Base64.DEFAULT
+                )
+            )
+
+            Regex(
+                "\"link\":\"(.*?)\""
+            )
+                .find(json)
+                ?.groupValues
+                ?.getOrNull(1)
 
         } catch (_: Exception) {
             null
@@ -103,27 +271,76 @@ object Embed69Extractor {
     }
 
     // =========================
-    // HOST FIX (CLAVE)
+    // FIX HOSTS
     // =========================
-    private fun fixHosts(url: String): String {
+    private fun fixHosts(
+        url: String
+    ): String {
+
         return url
-            .replace("hglink.to", "streamwish.to")
-            .replace("swdyu.com", "streamwish.to")
-            .replace("cybervynx.com", "streamwish.to")
-            .replace("dumbalag.com", "streamwish.to")
-            .replace("wishembed.com", "streamwish.to")
-            .replace("stwishe.com", "streamwish.to")
+            .replace(
+                "hglink.to",
+                "streamwish.to"
+            )
+            .replace(
+                "swdyu.com",
+                "streamwish.to"
+            )
+            .replace(
+                "cybervynx.com",
+                "streamwish.to"
+            )
+            .replace(
+                "dumbalag.com",
+                "streamwish.to"
+            )
+            .replace(
+                "wishembed.com",
+                "streamwish.to"
+            )
+            .replace(
+                "stwishe.com",
+                "streamwish.to"
+            )
 
-            .replace("mivalyo.com", "vidhidepro.com")
-            .replace("dinisglows.com", "vidhidepro.com")
-            .replace("dhtpre.com", "vidhidepro.com")
-            .replace("vidhide.com", "vidhidepro.com")
-            .replace("voidboost.net", "vidhidepro.com")
+            .replace(
+                "mivalyo.com",
+                "vidhidepro.com"
+            )
+            .replace(
+                "dinisglows.com",
+                "vidhidepro.com"
+            )
+            .replace(
+                "dhtpre.com",
+                "vidhidepro.com"
+            )
+            .replace(
+                "vidhide.com",
+                "vidhidepro.com"
+            )
+            .replace(
+                "voidboost.net",
+                "vidhidepro.com"
+            )
 
-            .replace("filemoon.link", "filemoon.sx")
-            .replace("filemoon.lat", "filemoon.sx")
+            .replace(
+                "filemoon.link",
+                "filemoon.sx"
+            )
+            .replace(
+                "filemoon.lat",
+                "filemoon.sx"
+            )
 
-            .replace("uqload.io", "uqload.com")
-            .replace("voe.sx", "voe.unblockit.cat")
+            .replace(
+                "uqload.io",
+                "uqload.com"
+            )
+
+            .replace(
+                "voe.sx",
+                "voe.unblockit.cat"
+            )
     }
 }
