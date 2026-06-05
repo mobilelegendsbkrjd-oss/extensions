@@ -1,28 +1,26 @@
 package com.latanime
 
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
-import java.net.URLEncoder
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 class Latanime : MainAPI() {
 
     override var mainUrl = "https://latanime.org"
     override var name = "Latanime"
     override val hasMainPage = true
-    override var lang = "es-mx"
-    override val hasDownloadSupport = true
+    override var lang = "es"
     override val hasQuickSearch = true
-    override val instantLinkLoading = true
-
+    override val hasDownloadSupport = true
     override val supportedTypes = setOf(
         TvType.Anime,
-        TvType.AnimeMovie,
-        TvType.OVA
+        TvType.AnimeMovie
     )
 
+    override val instantLinkLoading = true
     override val mainPage = mainPageOf(
         "animes?fecha=false&genero=false&letra=false&categoria=latino" to "Anime Latino",
         "animes?fecha=false&genero=false&letra=false&categoria=anime" to "Anime",
@@ -49,15 +47,13 @@ class Latanime : MainAPI() {
         return newHomePageResponse(
             HomePageList(
                 request.name,
-                items,
-                false
+                items
             ),
             hasNext = items.isNotEmpty()
         )
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-
         val document = app.get(
             "$mainUrl/buscar?q=${query.trim()}"
         ).document
@@ -68,18 +64,17 @@ class Latanime : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-
         val document = app.get(url).document
 
         val title = document.selectFirst("h2")?.text()?.trim()
-            ?: "Desconocido"
+            ?: "Sin título"
 
         val poster = fixUrlNull(
             document.selectFirst("meta[property=og:image]")
                 ?.attr("content")
         )
 
-        val description = document.selectFirst("h2 ~ p.my-2")
+        val plot = document.selectFirst("h2 ~ p.my-2")
             ?.text()
             ?.trim()
 
@@ -93,11 +88,12 @@ class Latanime : MainAPI() {
             ?.value
             ?.toIntOrNull()
 
-        val episodeAnchors = document.select("div.row a[href*='/ver/']")
-
-        val isMovie = episodeAnchors.size <= 1 ||
+        val episodesRaw = document.select("div.row a[href*='/ver/']")
+        val isMovie = episodesRaw.size <= 1 ||
                 title.contains("pelicula", true) ||
                 title.contains("movie", true)
+
+        val background = poster
 
         val recommendations = document.select("div.row a")
             .mapNotNull { it.toSearchResult() }
@@ -106,8 +102,7 @@ class Latanime : MainAPI() {
 
         return if (!isMovie) {
 
-            val episodes = episodeAnchors.mapIndexed { index, element ->
-
+            val episodes = episodesRaw.mapIndexed { index, element ->
                 val epUrl = fixUrl(element.attr("href"))
 
                 newEpisode(epUrl) {
@@ -126,19 +121,13 @@ class Latanime : MainAPI() {
                 TvType.Anime
             ) {
                 posterUrl = poster
-                backgroundPosterUrl = poster
-                plot = description
+                backgroundPosterUrl = background
+                this.plot = plot
                 this.tags = tags
                 this.year = year
                 this.recommendations = recommendations
 
-                val malId = getMalIdFromTitle(title)
-                if (malId != null) {
-                    addMalId(malId)
-                }
-
-                if (
-                    title.contains("latino", true) ||
+                if (title.contains("latino", true) ||
                     title.contains("castellano", true)
                 ) {
                     addEpisodes(DubStatus.Dubbed, episodes)
@@ -149,7 +138,7 @@ class Latanime : MainAPI() {
 
         } else {
 
-            val movieUrl = episodeAnchors.firstOrNull()
+            val movieUrl = episodesRaw.firstOrNull()
                 ?.attr("href")
                 ?.let { fixUrl(it) }
                 ?: url
@@ -161,8 +150,8 @@ class Latanime : MainAPI() {
                 movieUrl
             ) {
                 posterUrl = poster
-                backgroundPosterUrl = poster
-                plot = description
+                backgroundPosterUrl = background
+                this.plot = plot
                 this.tags = tags
                 this.year = year
                 this.recommendations = recommendations
@@ -178,10 +167,11 @@ class Latanime : MainAPI() {
     ): Boolean {
 
         val document = app.get(data).document
-        var found = false
 
         val servers = document.select("#play-video a")
             .distinctBy { it.attr("data-player") }
+
+        if (servers.isEmpty()) return false
 
         for (element in servers) {
 
@@ -209,8 +199,6 @@ class Latanime : MainAPI() {
 
             if (!link.startsWith("http")) continue
 
-            found = true
-
             try {
                 loadExtractor(
                     link,
@@ -219,21 +207,23 @@ class Latanime : MainAPI() {
                     callback
                 )
             } catch (_: Exception) {
-
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = "$name ($label)",
-                        url = link,
-                        type = INFER_TYPE
-                    ) {
-                        this.referer = data
-                    }
-                )
+                try {
+                    callback.invoke(
+                        newExtractorLink(
+                            source = name,
+                            name = "$name ($label)",
+                            url = link,
+                            type = INFER_TYPE
+                        ) {
+                            this.referer = data
+                        }
+                    )
+                } catch (_: Exception) {
+                }
             }
         }
 
-        return found
+        return true
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
@@ -268,49 +258,6 @@ class Latanime : MainAPI() {
         }
     }
 
-    private suspend fun getMalIdFromTitle(title: String): Int? {
-        return try {
-
-            val clean = title
-                .substringBefore(" T")
-                .substringBefore(" Temporada")
-                .substringBefore(" Season")
-                .substringBefore(":")
-                .replace("Latino", "", true)
-                .replace("Castellano", "", true)
-                .replace("Sub Español", "", true)
-                .replace("Subtitulado", "", true)
-                .replace("(Latino)", "", true)
-                .replace("(Castellano)", "", true)
-                .replace(Regex("""\bS\d+\b""", RegexOption.IGNORE_CASE), "")
-                .replace(Regex("""\bT\d+\b""", RegexOption.IGNORE_CASE), "")
-                .replace(Regex("""\b\d{3,4}p\b""", RegexOption.IGNORE_CASE), "")
-                .replace(Regex("""[^\w\s:.-]"""), " ")
-                .replace(Regex("""\s+"""), " ")
-                .trim()
-
-            val query = URLEncoder.encode(clean, "UTF-8")
-
-            val res = app.get(
-                "https://api.jikan.moe/v4/anime?q=$query&limit=5"
-            ).parsedSafe<JikanResponse>()
-
-            val items = res?.data ?: return null
-
-            val exact = items.firstOrNull {
-                val t = it.title.orEmpty()
-                t.equals(clean, true) ||
-                        t.contains(clean, true) ||
-                        clean.contains(t, true)
-            }
-
-            (exact ?: items.firstOrNull())?.malId
-
-        } catch (_: Exception) {
-            null
-        }
-    }
-
     private fun Element.getImageAttr(): String? {
 
         val dataSrc = attr("data-src").trim()
@@ -326,17 +273,4 @@ class Latanime : MainAPI() {
 
         return null
     }
-
-    data class JikanResponse(
-        @JsonProperty("data")
-        val data: List<JikanAnime>? = null
-    )
-
-    data class JikanAnime(
-        @JsonProperty("mal_id")
-        val malId: Int? = null,
-
-        @JsonProperty("title")
-        val title: String? = null
-    )
 }
