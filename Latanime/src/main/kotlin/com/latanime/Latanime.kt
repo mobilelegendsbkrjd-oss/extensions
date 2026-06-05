@@ -6,6 +6,8 @@ import org.jsoup.nodes.Element
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import android.util.Log
+
 
 class Latanime : MainAPI() {
 
@@ -160,20 +162,30 @@ class Latanime : MainAPI() {
     }
 
     override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
+    data: String,
+    isCasting: Boolean,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
+): Boolean = coroutineScope {
 
-        val document = app.get(data).document
+    val document = app.get(data).document
 
-        val servers = document.select("#play-video a")
-            .distinctBy { it.attr("data-player") }
+    val servers = document.select(
+        "#play-video a, ul.cap_repro li a"
+    ).distinctBy {
+        it.attr("data-player")
+    }
 
-        if (servers.isEmpty()) return false
+    val downloadLinks = document.select(
+        "div.descarga2 div a[href]"
+    )
 
-        for (element in servers) {
+    if (servers.isEmpty() && downloadLinks.isEmpty()) {
+        return@coroutineScope false
+    }
+
+    servers.map { element ->
+        async {
 
             val rawLabel = element.text().trim()
 
@@ -186,45 +198,118 @@ class Latanime : MainAPI() {
 
             val raw = element.attr("data-player").trim()
 
-            val decoded = try {
-                base64Decode(raw)
-            } catch (_: Exception) {
-                raw
-            }
-
-            val link = decoded
-                .substringAfter("=")
-                .trim()
-                .ifBlank { decoded }
-
-            if (!link.startsWith("http")) continue
+            if (raw.isBlank()) return@async
 
             try {
-                loadExtractor(
-                    link,
-                    data,
-                    subtitleCallback,
-                    callback
-                )
-            } catch (_: Exception) {
-                try {
+
+                val iframeUrl = runCatching {
+                    app.get(
+                        "$mainUrl/reproductor?url=$raw"
+                    ).document
+                        .selectFirst("iframe, embed")
+                        ?.attr("src")
+                }.getOrNull()
+
+                val resolvedUrl = when {
+
+                    !iframeUrl.isNullOrBlank() -> {
+                        fixUrl(iframeUrl)
+                    }
+
+                    else -> {
+                        try {
+                            fixUrl(base64Decode(raw))
+                        } catch (_: Exception) {
+                            raw
+                        }
+                    }
+                }
+
+                if (!resolvedUrl.startsWith("http")) {
+                    return@async
+                }
+
+                if (resolvedUrl.contains("pixeldrain.com")) {
+
+                    val id = resolvedUrl
+                        .substringAfterLast("/")
+                        .substringBefore("?")
+
                     callback.invoke(
                         newExtractorLink(
                             source = name,
                             name = "$name ($label)",
-                            url = link,
+                            url = "https://pixeldrain.com/api/file/$id?download",
                             type = INFER_TYPE
                         ) {
-                            this.referer = data
+                            referer = data
                         }
                     )
-                } catch (_: Exception) {
+
+                    return@async
                 }
+
+                loadExtractor(
+                    resolvedUrl,
+                    data,
+                    subtitleCallback,
+                    callback
+                )
+
+            } catch (e: Exception) {
+                Log.e("LATANIME", "Server error", e)
             }
         }
+    }.awaitAll()
 
-        return true
-    }
+    downloadLinks.map { element ->
+        async {
+
+            try {
+
+                val href = fixUrl(
+                    element.attr("href")
+                )
+
+                if (href.isBlank()) {
+                    return@async
+                }
+
+                if (href.contains("pixeldrain.com")) {
+
+                    val id = href
+                        .substringAfterLast("/")
+                        .substringBefore("?")
+
+                    callback.invoke(
+                        newExtractorLink(
+                            source = name,
+                            name = "Pixeldrain Download",
+                            url = "https://pixeldrain.com/api/file/$id?download",
+                            type = INFER_TYPE
+                        ) {
+                            referer = data
+                        }
+                    )
+
+                    return@async
+                }
+
+                loadExtractor(
+                    href,
+                    data,
+                    subtitleCallback,
+                    callback
+                )
+
+            } catch (e: Exception) {
+                Log.e("LATANIME", "Download error", e)
+            }
+        }
+    }.awaitAll()
+
+    true
+}
 
     private fun Element.toSearchResult(): SearchResponse? {
 
